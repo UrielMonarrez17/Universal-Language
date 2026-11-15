@@ -6,6 +6,9 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
+    path: Assets/Scenes/ImmersiveHub.unity
+    guid: fdb28a1fedaa2904688adfec5eb3dd2f
+  - enabled: 1
     path: Assets/Scenes/MainMenu.unity
     guid: 44b8d64e296d246408d8b7c6c6e6e7ff
   - enabled: 1
