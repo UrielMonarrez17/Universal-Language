@@ -14,15 +14,24 @@ namespace Alterlife.Immersive
         public GameObject confirmControl;
         public TMP_Text status;
         public StudyDoor door;
+        public Transform marker;
+        public GameObject markerTooltip;
         public bool Pending { get; private set; }
         bool hovered;
+        Camera viewer;
         void Start()
         {
+            viewer = Camera.main;
             country.firstHoverEntered.AddListener(Enter);
             country.lastHoverExited.AddListener(Exit);
             country.selectEntered.AddListener(Select);
             session.Changed += Refresh;
             Refresh();
+        }
+        void LateUpdate()
+        {
+            // Location remains attached to France, while the flag stays legible from either controller.
+            if (marker && viewer) marker.rotation = viewer.transform.rotation;
         }
         void OnDestroy()
         {
@@ -47,6 +56,7 @@ namespace Alterlife.Immersive
         {
             highlight.enabled = hovered || Pending || session.FranceSelected;
             label.SetActive(hovered || Pending || session.FranceSelected);
+            if (markerTooltip) markerTooltip.SetActive(hovered || Pending || session.FranceSelected);
             confirmControl.SetActive(Pending && !session.FranceSelected);
             status.text = "France\nLanguage: French\nLanguage Progress: " + Mathf.RoundToInt(session.LanguageProgress * 100) + "%" +
                 (session.FranceSelected ? "\nStudy unlocked — welcome in" : "\nSelect France, then confirm");

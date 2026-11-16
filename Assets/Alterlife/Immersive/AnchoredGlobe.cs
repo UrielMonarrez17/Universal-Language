@@ -33,7 +33,12 @@ namespace Alterlife.Immersive
         }
         public void ApplyRotation(Quaternion current, Quaternion initial, Quaternion globeInitial)
         {
-            transform.rotation = current * Quaternion.Inverse(initial) * globeInitial;
+            // Horizontal sweep only. Preserve the globe's authored tilt; ignore wrist pitch and roll.
+            Vector3 from = Vector3.ProjectOnPlane(initial * Vector3.forward, Vector3.up);
+            Vector3 to = Vector3.ProjectOnPlane(current * Vector3.forward, Vector3.up);
+            if (from.sqrMagnitude < .01f || to.sqrMagnitude < .01f) return;
+            float yaw = Vector3.SignedAngle(from, to, Vector3.up);
+            transform.rotation = Quaternion.AngleAxis(yaw, Vector3.up) * globeInitial;
         }
         void OnDisable() { hand = null; }
         void OnDestroy()

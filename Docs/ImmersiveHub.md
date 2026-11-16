@@ -6,8 +6,8 @@ Open the existing project in **Unity 6000.5.9f1**. The original `MainMenu`, `Bas
 ## Implemented flow
 
 1. Spawn in the observatory. Physical room-scale movement is driven by the existing tracked camera.
-2. Teleport near the globe; hold the controller **grip/select** on Earth and rotate the controller. Release to leave Earth anchored to its pedestal.
-3. Point directly at France and select it. Its geographic surface highlights; the spatial label shows the French flag, French as the language, and saved language progress. Select **CONFIRM FRANCE**.
+2. Teleport near the globe; hold the controller **grip/select** on Earth and sweep the controller left/right. Only horizontal yaw rotates the Earth; wrist pitch and roll are ignored and the authored tilt stays fixed. Release to leave Earth anchored to its pedestal.
+3. Point at France's visible flag pin or its geographic surface and select it. Both share the same country hover and selection; the pin's nearby hover label says France / Language: French. The spatial details also show saved language progress. Select **CONFIRM FRANCE**.
 4. The physical sliding door opens. Teleportation into the study is enabled only after the door finishes opening. Walk/teleport through the opening.
 5. Select **OPEN YOUR JOURNEY** on the book's cover. The cover rotates above the binding and settles beneath the left page.
 6. Select the physical **TURN** and **BACK** page corners. A rigid page sweeps through 3D space; all chapter controls are disabled during the animation.
