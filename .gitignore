@@ -110,3 +110,45 @@ InitTestScene*.unity*
 
 # Local geography preparation dependencies, never required by Unity.
 /Artifacts/Immersive/geo-tools/
+
+# ==============================================================================
+# Excluded Project Folders (Tools, Artifacts, AI Documentation & Art)
+# ==============================================================================
+/[Tt]ools/
+/[Aa]rtifacts/
+/[Dd]ocs/
+/[Dd]ocs/[Aa][Ii]/
+**/[Aa][Ii]/
+*AIUsage*
+/[Aa]ssets/Alterlife/Art/
+/[Aa]ssets/Alterlife/Art.meta
+
+# ==============================================================================
+# MCP Servers & AI Agent Configurations (Codebase Memory, Figma, Unity, etc.)
+# ==============================================================================
+.mcp/
+.mcp.json
+*mcp_config*
+.codebase-memory/
+*codebase-memory*
+**/UnityMCP/
+**/UnityMCP.meta
+**/MCPForUnity/
+**/MCPForUnity.meta
+**/FigmaBuilderPlugin/
+
+# AI Coding Assistants & Local Rules/Memory
+.gemini/
+.claude/
+.cursor/
+.windsurf/
+.agents/
+.agent/
+_agents/
+_agent/
+GEMINI.md
+CLAUDE.md
+AGENTS.md
+.cursorrules
+.windsurfrules
+
