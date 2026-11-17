@@ -12,6 +12,7 @@ namespace Alterlife.Immersive.Editor
         {
             var scene = EditorSceneManager.OpenScene(ParisPrototypeBuilder.ScenePath);
             var root = GameObject.Find("Paris Restaurant Prototype").transform;
+            if (root.Find("Paris cityscape")) throw new System.InvalidOperationException("Paris has the newer city composition. Edit that scene instead of applying legacy terrace refinement.");
             root.Find("Eiffel Tower").position = new Vector3(7, -16, 53);
             for (int i = 0; i < 6; i++)
             {

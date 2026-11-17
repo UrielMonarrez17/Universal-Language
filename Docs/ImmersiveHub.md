@@ -1,6 +1,7 @@
 # Immersive Meta Quest navigation prototype
 
 Entry scene: `Assets/Scenes/ImmersiveHub.unity` (first enabled scene in Build Settings).
+The menus are now separate scenes: **ImmersiveHub** owns the globe/observatory; **BookSelection** owns the reading room/book. Selecting France loads BookSelection with a comfort fade. Its WORLD SELECTION control returns to ImmersiveHub. The restaurant chapter loads Paris, whose return control loads BookSelection.
 Open the existing project in **Unity 6000.5.9f1**. The original `MainMenu`, `BasicScene` and `SampleScene` are preserved.
 
 ## Implemented flow
@@ -8,7 +9,7 @@ Open the existing project in **Unity 6000.5.9f1**. The original `MainMenu`, `Bas
 1. Spawn in the observatory. Physical room-scale movement is driven by the existing tracked camera.
 2. Teleport near the globe; hold the controller **grip/select** on Earth and sweep the controller left/right. Only horizontal yaw rotates the Earth; wrist pitch and roll are ignored and the authored tilt stays fixed. Release to leave Earth anchored to its pedestal.
 3. Point at France's flag pin or geographic surface and select it. The flag stays facing the player and its hover label identifies France / French.
-4. Selection saves the country and automatically fades/teleports the player in front of the book. The sliding door also unlocks for later exploration.
+4. Selection saves the country and fades into BookSelection, with the player positioned in front of the desk. The former connecting doorway is closed; the two rooms are independent scenes.
 5. Select **OPEN YOUR JOURNEY** on the book's cover. The cover rotates above the binding and settles beneath the left page.
 6. Select the physical **TURN** and **BACK** page corners. A rigid page sweeps through 3D space; all chapter controls are disabled during the animation.
 7. Explore Contents, **Life at Home (1/5)**, **The Neighborhood Café (3/5)**, and **Customs Interview (5/5)**.
@@ -66,7 +67,7 @@ All runtime code is in `Assets/Alterlife/Immersive`:
 | Component | Responsibility |
 | --- | --- |
 | `AnchoredGlobe` | Controller rotation delta, fixed globe position, geographic mapping. |
-| `FranceSelection`, `StudyDoor` | Country hover/selection/confirmation, session update, animated door, study teleport gate. |
+| `FranceSelection`, `SceneJourney` | Country hover/selection, session update and fade/loading into the standalone book scene. `StudyDoor` is retained for the original combined-room authoring utility. |
 | `InteractiveBook`, `BookChapter` | Cover, page-turn animation, chapter visibility, per-page selection feedback and progress. |
 | `PhysicalControl` | Reusable near/ray collider control with hover feedback and persistent scene events. |
 | `ExperienceDefinition` | ScriptableObject ID, name, country, language, description, difficulty, default unlock, future scene path, milestone IDs. |
@@ -108,7 +109,7 @@ Use **Alterlife > Immersive > Validate Hub** in the Editor. Batch equivalent:
 
 Do not add `-quit`: this asynchronous Play Mode validator exits after its checks finish.
 
-The validator checks the single rig, controller configuration, near/far components, enabled locomotion, absence of a Canvas menu, collider clearance, actual teleport provider movement, supported materials, missing scripts, geographic raycasts (Paris/Corte and rejected London/Berlin/Madrid), targeting after globe rotation, anchored position, XRI selection callbacks, door and study unlock, cover pose, all four spreads, forward/back page geometry, interaction exclusion during turns, difficulty values, miniatures, selected stamps, confirmation/return, save serialization, milestones/assistance and optional movement switching.
+For the split scenes, this command routes to `ParisPrototypeValidation`: it checks globe direction/billboarding, the world-to-book transition, book spawn and opening/page turning, a single rig per destination, restaurant loading, supported city materials, missing scripts, assessment branches, saved milestones, assistance, and both return routes. The older combined-room validation remains in source for legacy authoring but is not the active split-scene test path.
 
 Actual Unity renders are saved in `Artifacts/Immersive/01-observatory.png` through `09-preparation.png`.
 Editor logs include `XR_ERROR_FORM_FACTOR_UNAVAILABLE` because no headset was connected. Passing Editor tests does **not** demonstrate physical controller tracking, stereo perception, standalone performance, Android build success or on-device comfort.

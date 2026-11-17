@@ -22,6 +22,7 @@ namespace Alterlife.Immersive
         public Transform bookArrival;
         public TeleportationProvider teleportation;
         public bool travelOnSelection = true;
+        public SceneJourney sceneJourney;
         public static bool ReturnToBookRequested;
         bool travelling;
         public bool Pending { get; private set; }
@@ -74,7 +75,8 @@ namespace Alterlife.Immersive
             session.SelectFrance();
             Pending = false;
             Refresh();
-            if (travelOnSelection && bookArrival && teleportation && !travelling) StartCoroutine(TravelToBook());
+            if (sceneJourney) { travelling = true; sceneJourney.OpenBook(); }
+            else if (travelOnSelection && bookArrival && teleportation && !travelling) StartCoroutine(TravelToBook());
         }
         IEnumerator TravelToBook()
         {
@@ -108,7 +110,7 @@ namespace Alterlife.Immersive
             confirmControl.SetActive(Pending && !session.FranceSelected);
             status.text = "France\nLanguage: French\nLanguage Progress: " + Mathf.RoundToInt(session.LanguageProgress * 100) + "%" +
                 (session.FranceSelected ? "\nStudy unlocked — welcome in" : travelOnSelection ? "\nSelect France to visit the book" : "\nSelect France, then confirm");
-            if (session.FranceSelected) door.Unlock();
+            if (session.FranceSelected && door) door.Unlock();
         }
     }
 }

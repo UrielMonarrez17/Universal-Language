@@ -29,6 +29,7 @@ namespace Alterlife.Immersive.Editor
         [MenuItem("Alterlife/Restaurant/Validate Paris prototype")]
         public static void Run()
         {
+            if (!Application.isBatchMode && !EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
             EditorSceneManager.OpenScene(ImmersiveHubBuilder.ScenePath);
             // The optional desktop simulator UI assumes keyboard bindings; batch mode has no keyboard.
             // This is an unsaved test-only change, not a modification of the user's simulator setup.
@@ -46,7 +47,13 @@ namespace Alterlife.Immersive.Editor
                 if (Application.isBatchMode) EditorApplication.Exit(SessionState.GetInt(Pending + ".result", 1));
             }
         }
-        static void Begin() { started = EditorApplication.timeSinceStartup; frame = -1; routine = null; EditorApplication.update -= Tick; EditorApplication.update += Tick; }
+        static void Begin() { started = EditorApplication.timeSinceStartup; frame = -1; routine = null; SceneManager.sceneLoaded -= DisablePersistence; SceneManager.sceneLoaded += DisablePersistence; EditorApplication.update -= Tick; EditorApplication.update += Tick; }
+        static void DisablePersistence(Scene scene, LoadSceneMode mode)
+        {
+            var session = UnityEngine.Object.FindAnyObjectByType<LearningSession>();
+            if (session) session.PersistenceEnabled = false;
+            if (Application.isBatchMode) GameObject.Find("XR Device Simulator")?.SetActive(false);
+        }
         static void Tick()
         {
             if (!EditorApplication.isPlaying || EditorApplication.timeSinceStartup - started < 3 || frame == Time.frameCount) return;
@@ -60,6 +67,7 @@ namespace Alterlife.Immersive.Editor
             }
             catch (Exception ex) { Debug.LogException(ex); SessionState.SetInt(Pending + ".result", 1); }
             EditorApplication.update -= Tick;
+            SceneManager.sceneLoaded -= DisablePersistence;
             if (target) target.Release();
             EditorApplication.ExitPlaymode();
         }
@@ -74,15 +82,26 @@ namespace Alterlife.Immersive.Editor
             Assert(Quaternion.Angle(globe.transform.rotation, Quaternion.AngleAxis(-60, Vector3.up) * before) < .01f, "Globe front follows horizontal controller direction; no pitch or roll");
             globe.transform.rotation = before; globe.enabled = true;
             var france = UnityEngine.Object.FindAnyObjectByType<FranceSelection>();
+            Assert(!UnityEngine.Object.FindAnyObjectByType<InteractiveBook>(), "World selection scene contains no book");
             yield return null; yield return null;
             var viewer = Camera.main;
             Assert(Vector3.Dot(france.marker.forward, (france.marker.position - viewer.transform.position).normalized) > .99f, "Flag faces the player independently of globe orientation");
             france.TargetFrance();
-            float deadline = Time.time + 1.6f; while (Time.time < deadline) yield return null;
-            var head = viewer.transform.position; var arrival = france.bookArrival.position;
-            Assert(Vector2.Distance(new Vector2(head.x, head.z), new Vector2(arrival.x, arrival.z)) < .05f, "Selecting France automatically teleports in front of the book");
             Assert(session.FranceSelected, "Country and language saved in session");
+            while (SceneManager.GetActiveScene().path != SceneJourney.BookScene) yield return null;
+            yield return null; yield return null;
+            session = UnityEngine.Object.FindAnyObjectByType<LearningSession>();
+            Assert(!UnityEngine.Object.FindAnyObjectByType<AnchoredGlobe>(), "Book selection is a separate scene without the globe");
+            var head = Camera.main.transform.position;
+            Assert(Vector2.Distance(new Vector2(head.x, head.z), new Vector2(0, 7.8f)) < .05f, "Book scene spawns in front of the desk");
+            Assert(UnityEngine.Object.FindObjectsByType<Unity.XR.CoreUtils.XROrigin>().Length == 1, "Book scene has one XR rig");
             Assert(UnityEngine.Object.FindAnyObjectByType<InteractiveBook>() != null, "Existing book preserved");
+            var book = UnityEngine.Object.FindAnyObjectByType<InteractiveBook>(); book.Open();
+            float deadline = Time.time + 1.5f; while (Time.time < deadline) yield return null;
+            Assert(book.IsOpen, "Book opens after scene transition");
+            book.Next(); deadline = Time.time + 1.2f; while (Time.time < deadline) yield return null;
+            Assert(book.CurrentSpread == 1, "Physical pages still turn in standalone book scene");
+            foreach (var t in UnityEngine.Object.FindObjectsByType<Transform>(FindObjectsInactive.Include)) AssertNoMissing(t.gameObject);
             var navigator = UnityEngine.Object.FindAnyObjectByType<ExperienceNavigator>();
             navigator.Select(session.catalog.First(e => e.id == "restaurant"));
             navigator.Confirm();
@@ -98,6 +117,10 @@ namespace Alterlife.Immersive.Editor
             Assert(eval.experience.scenePath == ParisPrototypeBuilder.ScenePath && Application.CanStreamedLevelBeLoaded(eval.experience.scenePath), "Book restaurant definition loads Paris");
             Assert(!eval.voice.IsConfigured, "No fake speech/AI service or embedded credential configured");
             SetupPreview();
+            Assert(GameObject.Find("Paris cityscape") && GameObject.Find("Cafe terrace detailing"), "Authored city and terrace detailing are present");
+            var visible = UnityEngine.Object.FindObjectsByType<MeshRenderer>().Where(r => r.enabled && r.gameObject.activeInHierarchy).ToArray();
+            Debug.Log("PARIS_VISIBLE_MESH_RENDERERS=" + visible.Length);
+            Assert(visible.All(r => r.sharedMaterials.All(m => m && m.shader && m.shader.isSupported)), "Visible city and Nicrom materials are supported");
             View(new Vector3(0, 1.65f, -1.35f), new Vector3(.1f, 1.3f, 1.5f));
             deadline = Time.time + 2; while (Time.time < deadline) yield return null;
             Capture("01-terrace-player");
@@ -142,6 +165,14 @@ namespace Alterlife.Immersive.Editor
             byte[] wav = RestaurantVoiceBridge.EncodeWav(new float[1600], 1, 16000);
             Assert(wav.Length == 3244 && System.Text.Encoding.ASCII.GetString(wav, 0, 4) == "RIFF", "Microphone WAV encoding has valid PCM header and length");
             eval.Begin(); eval.InspectMenu(); eval.ShowHelp();
+            eval.ReturnToBook();
+            while (SceneManager.GetActiveScene().path != SceneJourney.BookScene) yield return null;
+            yield return null; yield return null;
+            Assert(UnityEngine.Object.FindAnyObjectByType<InteractiveBook>() && !UnityEngine.Object.FindAnyObjectByType<RestaurantEvaluation>(), "Return from Paris loads the book scene and unloads Paris");
+            GameObject.Find("Return to world selection").GetComponent<PhysicalControl>().Press();
+            while (SceneManager.GetActiveScene().path != SceneJourney.WorldScene) yield return null;
+            yield return null; yield return null;
+            Assert(UnityEngine.Object.FindAnyObjectByType<AnchoredGlobe>() && !UnityEngine.Object.FindAnyObjectByType<InteractiveBook>(), "Book return control loads world selection without a duplicate room");
         }
         static void AssertNoMissing(GameObject go) { if (GameObjectUtility.GetMonoBehavioursWithMissingScriptCount(go) > 0) throw new Exception("Missing script: " + go.name); }
         static void SetupPreview()

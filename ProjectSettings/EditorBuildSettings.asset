@@ -17,6 +17,9 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/Scenes/Paris.unity
     guid: 28902e4fd9eba87458bcf7eccd3f5ae3
+  - enabled: 1
+    path: Assets/Scenes/BookSelection.unity
+    guid: 4f5ef68780dc239448bba55c0e7a3fde
   m_configObjects:
     Unity.XR.Oculus.Settings: {fileID: 11400000, guid: bfa1182bd221b4ca89619141f66f1260, type: 2}
     Unity.XR.WindowsMR.Settings: {fileID: 11400000, guid: dc5a169419fa04987b057f65238cf3ba, type: 2}

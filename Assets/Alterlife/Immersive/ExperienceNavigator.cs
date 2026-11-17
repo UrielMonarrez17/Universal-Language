@@ -49,8 +49,9 @@ namespace Alterlife.Immersive
         public void ReturnToBook() { preparation.SetActive(false); if (Selected) confirmControl.SetActive(true); }
         public static void ReturnToHub()
         {
-            FranceSelection.ReturnToBookRequested = true;
-            SceneManager.LoadSceneAsync("Assets/Scenes/ImmersiveHub.unity");
+            var journey = FindAnyObjectByType<SceneJourney>();
+            if (journey) journey.OpenBook();
+            else SceneManager.LoadSceneAsync(SceneJourney.BookScene);
         }
     }
 }

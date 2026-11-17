@@ -34,6 +34,7 @@ namespace Alterlife.Immersive.Editor
         [MenuItem("Alterlife/Immersive/Validate Hub")]
         public static void Run()
         {
+            if (File.Exists(SceneJourney.BookScene)) { ParisPrototypeValidation.Run(); return; }
             if (!Application.isBatchMode && !EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
             EditorSceneManager.OpenScene(ImmersiveHubBuilder.ScenePath);
             SessionState.SetBool(Pending, true);
