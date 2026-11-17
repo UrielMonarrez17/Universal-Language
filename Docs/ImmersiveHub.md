@@ -7,16 +7,16 @@ Open the existing project in **Unity 6000.5.9f1**. The original `MainMenu`, `Bas
 
 1. Spawn in the observatory. Physical room-scale movement is driven by the existing tracked camera.
 2. Teleport near the globe; hold the controller **grip/select** on Earth and sweep the controller left/right. Only horizontal yaw rotates the Earth; wrist pitch and roll are ignored and the authored tilt stays fixed. Release to leave Earth anchored to its pedestal.
-3. Point at France's visible flag pin or its geographic surface and select it. Both share the same country hover and selection; the pin's nearby hover label says France / Language: French. The spatial details also show saved language progress. Select **CONFIRM FRANCE**.
-4. The physical sliding door opens. Teleportation into the study is enabled only after the door finishes opening. Walk/teleport through the opening.
+3. Point at France's flag pin or geographic surface and select it. The flag stays facing the player and its hover label identifies France / French.
+4. Selection saves the country and automatically fades/teleports the player in front of the book. The sliding door also unlocks for later exploration.
 5. Select **OPEN YOUR JOURNEY** on the book's cover. The cover rotates above the binding and settles beneath the left page.
 6. Select the physical **TURN** and **BACK** page corners. A rigid page sweeps through 3D space; all chapter controls are disabled during the animation.
 7. Explore Contents, **Life at Home (1/5)**, **The Neighborhood Café (3/5)**, and **Customs Interview (5/5)**.
 8. Select a miniature or its integrated **SELECT EXPERIENCE** control. A SELECTED stamp appears on that page, the selection is saved, and the adjacent summary shows its description and rating.
-9. Select **CONFIRM EXPERIENCE**. The preparation alcove appears in the study with the selected name and **COMING SOON**. Its **RETURN TO THE BOOK** control dismisses it.
+9. Select **CONFIRM EXPERIENCE**. The restaurant now loads the playable Paris prototype; see [Paris instructions](ParisPrototype.md). Unimplemented experiences retain their preparation state. Returning from Paris places the player at the book.
 
 The integrated page-corner controls are an intentional prototype alternative to continuously dragging a flexible sheet. They animate actual page geometry, not a swapped background image.
-The desk mug can be picked up; the lamp has an interactive switch. Actual learning gameplay is outside this change.
+The desk mug can be picked up; the lamp has an interactive switch. The restaurant assessment is implemented separately; apartment and customs gameplay remain future work.
 
 ## Movement and comfort
 

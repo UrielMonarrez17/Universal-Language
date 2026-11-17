@@ -73,7 +73,7 @@ namespace Alterlife.Immersive.Editor
             globe.ApplyRotation(Quaternion.Euler(65, 0, 40), Quaternion.identity, original);
             if (Quaternion.Angle(original, globe.transform.rotation) > .01f) throw new Exception("Pitch/roll changed globe rotation.");
             globe.ApplyRotation(Quaternion.Euler(35, 60, 25), Quaternion.identity, original);
-            if (Quaternion.Angle(Quaternion.AngleAxis(60, Vector3.up) * original, globe.transform.rotation) > .01f)
+            if (Quaternion.Angle(Quaternion.AngleAxis(-60, Vector3.up) * original, globe.transform.rotation) > .01f)
                 throw new Exception("Horizontal globe rotation failed.");
             globe.transform.rotation = original;
             if (!selection.country.colliders.Contains(selection.marker.GetComponent<Collider>())) throw new Exception("Pin collider not wired to France.");

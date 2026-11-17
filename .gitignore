@@ -152,3 +152,12 @@ AGENTS.md
 .cursorrules
 .windsurfrules
 
+# Runtime prototype support and its setup guide (other local tools/docs stay ignored).
+!/[Tt]ools/
+/[Tt]ools/*
+!/Tools/RestaurantVoice/
+/Tools/RestaurantVoice/__pycache__/
+!/[Dd]ocs/
+/[Dd]ocs/*
+!/Docs/ParisPrototype.md
+

@@ -20,8 +20,11 @@ MonoBehaviour:
   description: "Practice conversations in a caf\xE9 or restaurant."
   difficulty: 3
   unlockedByDefault: 1
-  scenePath: 
+  scenePath: Assets/Scenes/Paris.unity
   milestoneIds:
+  - greet-waiter
+  - read-menu
   - ask-about-menu
   - place-order
   - respond-to-waiter
+  - confirm-order

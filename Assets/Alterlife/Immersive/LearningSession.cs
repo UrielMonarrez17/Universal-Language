@@ -46,7 +46,7 @@ namespace Alterlife.Immersive
         public ExperienceProgress GetProgress(ExperienceDefinition definition)
         {
             var entry = Data.experiences.Find(x => x.id == definition.id);
-            if (entry != null) return entry;
+            if (entry != null) { Recalculate(entry, definition); return entry; }
             entry = new ExperienceProgress { id = definition.id, unlocked = definition.unlockedByDefault };
             Data.experiences.Add(entry);
             return entry;
@@ -76,9 +76,18 @@ namespace Alterlife.Immersive
             if (entry.milestones == null) entry.milestones = new List<string>();
             if (!entry.milestones.Contains(milestoneId)) entry.milestones.Add(milestoneId);
             if (usedAssistance) entry.assistanceUses++;
-            entry.progress = definition.milestoneIds.Length == 0 ? 0 : (float)entry.milestones.Count / definition.milestoneIds.Length;
-            entry.completed = entry.progress >= 1;
+            Recalculate(entry, definition);
             Save();
+        }
+        static void Recalculate(ExperienceProgress entry, ExperienceDefinition definition)
+        {
+            if (entry.milestones == null) entry.milestones = new List<string>();
+            var required = new HashSet<string>(definition.milestoneIds ?? Array.Empty<string>());
+            if (required.Count == 0) return;
+            int count = 0;
+            foreach (var id in required) if (entry.milestones.Contains(id)) count++;
+            entry.progress = (float)count / required.Count;
+            entry.completed = count == required.Count;
         }
         public void Save()
         {

@@ -11,6 +11,8 @@ namespace Alterlife.Immersive
     /// </summary>
     public sealed class CommunicativeEncounter : MonoBehaviour
     {
+        [Header("Multi-step restaurant override")]
+        public RestaurantEvaluation restaurantEvaluation;
         [Header("Academic & Pedagogical Context")]
         [SerializeField] private ExperienceDefinition experience;
         [SerializeField] private LearningSession session;
@@ -55,6 +57,7 @@ namespace Alterlife.Immersive
 
         private void Start()
         {
+            if (restaurantEvaluation != null) return;
             if (session == null) session = FindAnyObjectByType<LearningSession>();
             if (companion == null) companion = FindAnyObjectByType<HummingbirdCompanion>();
 
@@ -63,6 +66,7 @@ namespace Alterlife.Immersive
 
         public void BeginEncounter()
         {
+            if (restaurantEvaluation != null) { restaurantEvaluation.Begin(); return; }
             isEncounterActive = true;
             encounterCompleted = false;
             usedAssistance = false;
@@ -149,6 +153,8 @@ namespace Alterlife.Immersive
         /// </summary>
         public void OnVoiceTranscriptionReceived(string transcription)
         {
+            if (restaurantEvaluation != null) { restaurantEvaluation.SubmitTranscript(transcription); return; }
+            if (string.IsNullOrWhiteSpace(transcription)) return;
             if (!isEncounterActive || encounterCompleted) return;
 
             string cleaned = transcription.ToLowerInvariant();

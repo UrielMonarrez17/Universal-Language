@@ -71,7 +71,8 @@ namespace Alterlife.Immersive
             Vector3 to = Vector3.ProjectOnPlane(current * Vector3.forward, Vector3.up);
             if (from.sqrMagnitude < .01f || to.sqrMagnitude < .01f) return;
 
-            float yaw = Vector3.SignedAngle(from, to, Vector3.up);
+            // The front surface must follow the player's horizontal sweep, not move against it.
+            float yaw = -Vector3.SignedAngle(from, to, Vector3.up);
             transform.rotation = Quaternion.AngleAxis(yaw, Vector3.up) * globeInitial;
 
             // Calculate instantaneous angular velocity for release inertia

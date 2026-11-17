@@ -1,5 +1,7 @@
 # Unity project context
 
+Updated 2026-11-17: Paris is now a saved, connected restaurant scene using the user's imported city/tower/cafe/barista assets. RestaurantEvaluation and RestaurantLesson integrate with CommunicativeEncounter and LearningSession (six milestone objectives, help tracking, physical menu). France selects/teleports directly to the book; its marker billboards independently and globe yaw direction is inverted. Docs/ParisPrototype.md is the current task guide. Tools/RestaurantVoice contains an optional loopback backend; endpoint is intentionally empty in the scene until the user configures a provider. Validation is desktop Play mode and mocked Python tests, not headset/audio/provider validation. Preserve the inactive original Paris hierarchy. Do not rerun the initial builder over the authored scene.
+
 Updated 2026-11-15: the immersive prototype now enters through `Assets/Scenes/ImmersiveHub.unity`, with one original XR rig, connected observatory/study geometry, an anchored geographic globe and a hinged 3D experience book. Runtime systems and ScriptableObject definitions are under `Assets/Alterlife/Immersive`; `Docs/ImmersiveHub.md` describes architecture, interactions, source assets and validation. The old flat menu and template scenes remain intact. The hub scopes a copied URP performance asset through `HubRendering`, restoring the prior pipeline on scene exit. Android Build Support is not installed in this Editor and no headset was used; hardware/build validation remains outstanding.
 
 Inspected 2026-11-14 at baseline commit `461e28c`.

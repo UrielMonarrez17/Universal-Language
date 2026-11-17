@@ -4093,10 +4093,10 @@ MonoBehaviour:
       m_Calls: []
   m_text: 'GRAB & TURN
 
-    Hold grip and sweep left or right.
+    Sweep left or right to rotate Earth.
 
-    Point at the
-    French flag to select France.
+    Select the
+    French flag to visit the book.
 
     Other destinations: Coming Soon'
   m_isRightToLeft: 0
@@ -12459,6 +12459,37 @@ Transform:
   m_Children:
   - {fileID: 27082274}
   m_Father: {fileID: 30889442}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &636018257
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 636018258}
+  m_Layer: 0
+  m_Name: Book arrival point
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &636018258
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 636018257}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0.01, z: 7.8}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &640069485
 GameObject:
@@ -25619,6 +25650,9 @@ MonoBehaviour:
   door: {fileID: 279606745}
   marker: {fileID: 1561308269}
   markerTooltip: {fileID: 12985611}
+  bookArrival: {fileID: 636018258}
+  teleportation: {fileID: 881488819}
+  travelOnSelection: 1
 --- !u!1 &1546033106
 GameObject:
   m_ObjectHideFlags: 0
@@ -32441,6 +32475,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f43f638f6237b53448f93b2addf445e9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Alterlife.Immersive.AnchoredGlobe
+  angularFriction: 3
+  maxAngularVelocity: 180
 --- !u!114 &2075292847
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -33402,3 +33438,4 @@ SceneRoots:
   - {fileID: 1528907371}
   - {fileID: 122865615}
   - {fileID: 95903698}
+  - {fileID: 636018258}
