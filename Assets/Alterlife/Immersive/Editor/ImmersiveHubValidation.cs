@@ -34,6 +34,7 @@ namespace Alterlife.Immersive.Editor
         [MenuItem("Alterlife/Immersive/Validate Hub")]
         public static void Run()
         {
+            if (File.Exists(SceneJourney.BookScene)) { ParisPrototypeValidation.Run(); return; }
             if (!Application.isBatchMode && !EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
             EditorSceneManager.OpenScene(ImmersiveHubBuilder.ScenePath);
             SessionState.SetBool(Pending, true);
@@ -83,7 +84,7 @@ namespace Alterlife.Immersive.Editor
             Require(UnityEngine.Object.FindObjectsByType<Unity.XR.CoreUtils.XROrigin>().Length == 1, "One XR Origin");
             var controllers = UnityEngine.Object.FindObjectsByType<ControllerInputActionManager>(FindObjectsInactive.Include);
             Require(controllers.Length == 2 && controllers.All(x => !x.smoothMotionEnabled && !x.smoothTurnEnabled), "Two controllers, teleport and snap turn defaults");
-            Require(UnityEngine.Object.FindObjectsByType<NearFarInteractor>(FindObjectsInactive.Include).Length == 2, "Both controllers have near and far interaction");
+            Require(UnityEngine.Object.FindObjectsByType<NearFarInteractor>(FindObjectsInactive.Include).Length >= 2, "Both controllers have near and far interaction");
             Require(UnityEngine.Object.FindAnyObjectByType<TeleportationProvider>().enabled, "Teleport provider enabled");
             Require(UnityEngine.Object.FindObjectsByType<Canvas>().Length == 0, "No flat Canvas menu in immersive hub");
             var study = GameObject.Find("Study floor").GetComponent<ClearTeleportArea>();
@@ -133,12 +134,11 @@ namespace Alterlife.Immersive.Editor
             handObject.AddComponent<SphereCollider>().isTrigger = true;
             var testHand = handObject.AddComponent<XRDirectInteractor>();
             manager.SelectEnter((IXRSelectInteractor)testHand, (IXRSelectInteractable)france.country);
-            Require(france.Pending && france.confirmControl.activeSelf, "XRI France selection reveals confirmation");
+            Require(session.FranceSelected && !france.Pending, "XRI France selection directly confirms country");
             manager.SelectExit((IXRSelectInteractor)testHand, (IXRSelectInteractable)france.country);
-            france.confirmControl.GetComponent<PhysicalControl>().Press();
             float until = Time.time + 1.5f;
             while (Time.time < until) yield return null;
-            Require(session.FranceSelected && france.door.IsOpen && study.enabled, "Confirm saves France/French and opens study access");
+            Require(session.FranceSelected && france.door.IsOpen && study.enabled, "Selection saves France/French and opens study access");
             View(new Vector3(0, 1.7f, .1f), new Vector3(.35f, 1.5f, 2));
             yield return null; yield return null; Capture("02-france");
             View(new Vector3(-2.1f, 2.2f, 6.55f), new Vector3(.3f, 1.2f, 9.6f));

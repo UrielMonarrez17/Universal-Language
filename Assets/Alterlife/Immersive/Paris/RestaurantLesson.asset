@@ -1,0 +1,59 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 125ff35cb64354f4e90904181e5b8b3f, type: 3}
+  m_Name: RestaurantLesson
+  m_EditorClassIdentifier: Assembly-CSharp::Alterlife.Immersive.RestaurantLesson
+  lines:
+  - milestoneId: greet-waiter
+    prompt: Bonjour ! Bienvenue. Voici le menu.
+    hint: Greet the waiter and say thank you.
+    example: Bonjour, merci beaucoup !
+    alternative: Bonjour et merci !
+    voice: {fileID: 0}
+  - milestoneId: read-menu
+    prompt: "Je vous laisse regarder le menu. Dites-moi quand vous \xEAtes pr\xEAt."
+    hint: Read the physical menu, then say you are ready to order.
+    example: "Je suis pr\xEAt \xE0 commander."
+    alternative: "Je suis pr\xEAte \xE0 commander."
+    voice: {fileID: 0}
+  - milestoneId: ask-about-menu
+    prompt: Vous voulez un conseil ?
+    hint: Ask the waiter for a recommendation.
+    example: Oui, qu'est-ce que vous me conseillez ?
+    alternative: Qu'est-ce que vous recommandez ?
+    voice: {fileID: 0}
+  - milestoneId: place-order
+    prompt: "Je vous conseille le croque-monsieur. Il contient du jambon et du fromage.
+      Vous pr\xE9f\xE9rez un plat chaud ou une salade ?"
+    hint: Order one dish from the menu.
+    example: "Je voudrais un croque-monsieur, s'il vous pla\xEEt."
+    alternative: "Une salade, s'il vous pla\xEEt."
+    voice: {fileID: 0}
+  - milestoneId: respond-to-waiter
+    prompt: Et comme boisson ?
+    hint: Order water or coffee.
+    example: "De l'eau, s'il vous pla\xEEt."
+    alternative: "Un caf\xE9, s'il vous pla\xEEt."
+    voice: {fileID: 0}
+  - milestoneId: respond-to-waiter
+    prompt: De l'eau plate ou gazeuse ?
+    hint: Choose still or sparkling water.
+    example: "Plate, s'il vous pla\xEEt."
+    alternative: "Gazeuse, s'il vous pla\xEEt."
+    voice: {fileID: 0}
+  - milestoneId: confirm-order
+    prompt: "C'est bien \xE7a ?"
+    hint: Listen to the order. Confirm it or correct a mistake.
+    example: "Oui, c'est \xE7a. Merci !"
+    alternative: "Pouvez-vous r\xE9p\xE9ter, s'il vous pla\xEEt ?"
+    voice: {fileID: 0}
+  challengeWaterConfirmation: 1

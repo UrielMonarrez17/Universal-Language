@@ -110,3 +110,76 @@ InitTestScene*.unity*
 
 # Local geography preparation dependencies, never required by Unity.
 /Artifacts/Immersive/geo-tools/
+
+# ==============================================================================
+# Excluded Project Folders (Tools, Artifacts, AI Documentation & Art)
+# ==============================================================================
+/[Tt]ools/
+/[Aa]rtifacts/
+/[Dd]ocs/
+/[Dd]ocs/[Aa][Ii]/
+**/[Aa][Ii]/
+*AIUsage*
+/[Aa]ssets/Alterlife/Art/
+/[Aa]ssets/Alterlife/Art.meta
+
+# ==============================================================================
+# MCP Servers & AI Agent Configurations (Codebase Memory, Figma, Unity, etc.)
+# ==============================================================================
+.mcp/
+.mcp.json
+.vscode/mcp.json
+*mcp_config*
+*mcp-config*
+
+# Codebase Memory MCP
+.codebase-memory/
+.codebase-memory*
+*codebase-memory*
+*codebase_memory*
+.cbm/
+.cbm*
+
+# Unity MCP (MCPForUnity / com.coplaydev.unity-mcp & Roslyn runtime compilation DLLs)
+**/[Uu]nity[Mm][Cc][Pp]*/
+**/[Uu]nity[Mm][Cc][Pp]*.meta
+*unity-mcp*
+**/[Mm][Cc][Pp][Ff]or[Uu]nity*/
+**/[Mm][Cc][Pp][Ff]or[Uu]nity*.meta
+*MCPForUnity*
+**/com.coplaydev.unity-mcp*/
+**/com.coplaydev.unity-mcp*.meta
+/[Aa]ssets/[Pp]lugins/[Rr]oslyn/
+/[Aa]ssets/[Pp]lugins/[Rr]oslyn.meta
+/[Aa]ssets/[Pp]lugins.meta
+/[Aa]ssets/[Ss]creenshots/
+/[Aa]ssets/[Ss]creenshots.meta
+
+# Other MCP Plugins
+**/FigmaBuilderPlugin/
+**/FigmaBuilderPlugin.meta
+
+# AI Coding Assistants & Local Rules/Memory
+.gemini/
+.claude/
+.cursor/
+.windsurf/
+.agents/
+.agent/
+_agents/
+_agent/
+GEMINI.md
+CLAUDE.md
+AGENTS.md
+.cursorrules
+.windsurfrules
+
+# Runtime prototype support and its setup guide (other local tools/docs stay ignored).
+!/[Tt]ools/
+/[Tt]ools/*
+!/Tools/RestaurantVoice/
+/Tools/RestaurantVoice/__pycache__/
+!/[Dd]ocs/
+/[Dd]ocs/*
+!/Docs/ParisPrototype.md
+

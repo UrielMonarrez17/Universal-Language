@@ -1,21 +1,109 @@
+using System.Collections.Generic;
 using TMPro;
+using Unity.XR.CoreUtils;
 using UnityEngine;
+using UnityEngine.XR;
 using UnityEngine.XR.Interaction.Toolkit.Samples.StarterAssets;
 
 namespace Alterlife.Immersive
 {
     public sealed class ComfortOptions : MonoBehaviour
     {
+        const string SeatedPrefKey = "Alterlife.Comfort.Seated";
+        public static bool PersistenceEnabled = true;
+
         public ControllerInputActionManager leftController;
         public TMP_Text label;
-        public void ToggleSmoothMovement()
+
+        [Header("Posture & Height Calibration")]
+        public TMP_Text postureLabel;
+        public XROrigin xrOrigin;
+        public float seatedHeightOffset = 0.40f;
+
+        public bool IsSeatedMode { get; private set; }
+
+        void Start()
         {
-            leftController.smoothMotionEnabled = !leftController.smoothMotionEnabled;
+            if (leftController)
+                leftController.smoothMotionEnabled = false;
+
+            if (xrOrigin == null)
+                xrOrigin = FindAnyObjectByType<XROrigin>();
+
+            IsSeatedMode = PersistenceEnabled && PlayerPrefs.GetInt(SeatedPrefKey, 0) == 1;
+            ApplyPosture(IsSeatedMode);
             Refresh();
         }
-        void Start() { leftController.smoothMotionEnabled = false; Refresh(); }
-        void Refresh() => label.text = leftController.smoothMotionEnabled
-            ? "MOVEMENT: SMOOTH\nLeft stick to walk • Right stick to teleport\nSelect to use teleport only"
-            : "MOVEMENT: TELEPORT\nPush stick forward • Aim at floor • Release\nSelect for optional smooth movement";
+
+        public void ToggleSmoothMovement()
+        {
+            if (leftController)
+                leftController.smoothMotionEnabled = !leftController.smoothMotionEnabled;
+            Refresh();
+        }
+
+        public void TogglePosture()
+        {
+            IsSeatedMode = !IsSeatedMode;
+            if (PersistenceEnabled)
+            {
+                PlayerPrefs.SetInt(SeatedPrefKey, IsSeatedMode ? 1 : 0);
+                PlayerPrefs.Save();
+            }
+
+            ApplyPosture(IsSeatedMode);
+            RecenterView();
+            Refresh();
+        }
+
+        public void RecenterView()
+        {
+            var inputs = new List<XRInputSubsystem>();
+            SubsystemManager.GetSubsystems(inputs);
+            foreach (var input in inputs)
+            {
+                if (input != null && input.running)
+                    input.TryRecenter();
+            }
+        }
+
+        public static void ApplySavedPosture(XROrigin origin, float seatedOffset = 0.40f)
+        {
+            if (origin == null || origin.CameraFloorOffsetObject == null)
+                return;
+
+            bool seated = PersistenceEnabled && PlayerPrefs.GetInt(SeatedPrefKey, 0) == 1;
+            var offsetTransform = origin.CameraFloorOffsetObject.transform;
+            var pos = offsetTransform.localPosition;
+            offsetTransform.localPosition = new Vector3(pos.x, seated ? seatedOffset : 0f, pos.z);
+        }
+
+        void ApplyPosture(bool seated)
+        {
+            if (xrOrigin == null)
+                xrOrigin = FindAnyObjectByType<XROrigin>();
+
+            if (xrOrigin == null || xrOrigin.CameraFloorOffsetObject == null)
+                return;
+
+            var offsetTransform = xrOrigin.CameraFloorOffsetObject.transform;
+            var pos = offsetTransform.localPosition;
+            offsetTransform.localPosition = new Vector3(pos.x, seated ? seatedHeightOffset : 0f, pos.z);
+        }
+
+        void Refresh()
+        {
+            if (label && leftController)
+            {
+                label.text = leftController.smoothMotionEnabled
+                    ? "MOVEMENT: SMOOTH\nLeft stick to walk • Right stick to teleport\nSelect to use teleport only"
+                    : "MOVE FREELY\nWalk within your play area.\nPush stick forward, aim at floor, release to teleport.\nSelect for optional smooth movement.";
+            }
+
+            if (postureLabel)
+            {
+                postureLabel.text = IsSeatedMode ? "POSTURE: SEATED" : "POSTURE: STANDING";
+            }
+        }
     }
 }

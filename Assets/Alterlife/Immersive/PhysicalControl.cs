@@ -13,6 +13,7 @@ namespace Alterlife.Immersive
         public Renderer feedbackRenderer;
         public Color hoverColor = new Color(1, .72f, .26f);
         XRSimpleInteractable interactable;
+        PhysicalPokeFilter pokeFilter;
         MaterialPropertyBlock block;
         Color original;
         float lastPress = -10;
@@ -21,6 +22,9 @@ namespace Alterlife.Immersive
             interactable = GetComponent<XRSimpleInteractable>();
             block = new MaterialPropertyBlock();
             if (feedbackRenderer) original = feedbackRenderer.sharedMaterial.color;
+            pokeFilter = new PhysicalPokeFilter(() => isActiveAndEnabled);
+            interactable.selectFilters.Add(pokeFilter);
+            interactable.interactionStrengthFilters.Add(pokeFilter);
             interactable.selectEntered.AddListener(Selected);
             interactable.activated.AddListener(Activated);
             interactable.firstHoverEntered.AddListener(Hover);
@@ -29,6 +33,11 @@ namespace Alterlife.Immersive
         void OnDestroy()
         {
             if (!interactable) return;
+            if (pokeFilter != null)
+            {
+                interactable.selectFilters.Remove(pokeFilter);
+                interactable.interactionStrengthFilters.Remove(pokeFilter);
+            }
             interactable.selectEntered.RemoveListener(Selected);
             interactable.activated.RemoveListener(Activated);
             interactable.firstHoverEntered.RemoveListener(Hover);

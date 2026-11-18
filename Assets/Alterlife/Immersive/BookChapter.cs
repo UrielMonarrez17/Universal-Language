@@ -24,7 +24,7 @@ namespace Alterlife.Immersive
             if (selectionControlLabel)
             {
                 selectionControlLabel.enabled = true;
-                selectionControlLabel.text = navigator && navigator.Selected == definition ? "SELECTED" : "SELECT EXPERIENCE";
+                selectionControlLabel.text = !navigator || !navigator.CanSelect(definition) ? "COMING SOON" : navigator.Selected == definition ? "SELECTED" : "SELECT EXPERIENCE";
             }
         }
         public void Select() => navigator.Select(definition);
