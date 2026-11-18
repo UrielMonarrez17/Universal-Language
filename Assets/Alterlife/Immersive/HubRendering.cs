@@ -9,7 +9,13 @@ namespace Alterlife.Immersive
     {
         public RenderPipelineAsset pipeline;
         RenderPipelineAsset previous;
-        void Awake() { previous = QualitySettings.renderPipeline; if (pipeline) QualitySettings.renderPipeline = pipeline; }
+        void Awake()
+        {
+            previous = QualitySettings.renderPipeline;
+            if (pipeline) QualitySettings.renderPipeline = pipeline;
+            if (!GetComponent<QuestPerformanceOptimizer>())
+                gameObject.AddComponent<QuestPerformanceOptimizer>();
+        }
         void OnDestroy() { QualitySettings.renderPipeline = previous; }
     }
 }

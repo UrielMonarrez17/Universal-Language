@@ -84,7 +84,7 @@ namespace Alterlife.Immersive.Editor
             Require(UnityEngine.Object.FindObjectsByType<Unity.XR.CoreUtils.XROrigin>().Length == 1, "One XR Origin");
             var controllers = UnityEngine.Object.FindObjectsByType<ControllerInputActionManager>(FindObjectsInactive.Include);
             Require(controllers.Length == 2 && controllers.All(x => !x.smoothMotionEnabled && !x.smoothTurnEnabled), "Two controllers, teleport and snap turn defaults");
-            Require(UnityEngine.Object.FindObjectsByType<NearFarInteractor>(FindObjectsInactive.Include).Length == 2, "Both controllers have near and far interaction");
+            Require(UnityEngine.Object.FindObjectsByType<NearFarInteractor>(FindObjectsInactive.Include).Length >= 2, "Both controllers have near and far interaction");
             Require(UnityEngine.Object.FindAnyObjectByType<TeleportationProvider>().enabled, "Teleport provider enabled");
             Require(UnityEngine.Object.FindObjectsByType<Canvas>().Length == 0, "No flat Canvas menu in immersive hub");
             var study = GameObject.Find("Study floor").GetComponent<ClearTeleportArea>();

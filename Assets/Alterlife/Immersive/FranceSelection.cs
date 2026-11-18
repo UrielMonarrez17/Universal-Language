@@ -28,12 +28,19 @@ namespace Alterlife.Immersive
         public bool Pending { get; private set; }
         bool hovered;
         Camera viewer;
+        PhysicalPokeFilter pokeFilter;
         void Start()
         {
             viewer = Camera.main;
-            country.firstHoverEntered.AddListener(Enter);
-            country.lastHoverExited.AddListener(Exit);
-            country.selectEntered.AddListener(Select);
+            if (country != null)
+            {
+                pokeFilter = new PhysicalPokeFilter(() => isActiveAndEnabled);
+                country.selectFilters.Add(pokeFilter);
+                country.interactionStrengthFilters.Add(pokeFilter);
+                country.firstHoverEntered.AddListener(Enter);
+                country.lastHoverExited.AddListener(Exit);
+                country.selectEntered.AddListener(Select);
+            }
             session.Changed += Refresh;
             Refresh();
             if (ReturnToBookRequested)
@@ -56,6 +63,11 @@ namespace Alterlife.Immersive
         {
             if (session) session.Changed -= Refresh;
             if (!country) return;
+            if (pokeFilter != null)
+            {
+                country.selectFilters.Remove(pokeFilter);
+                country.interactionStrengthFilters.Remove(pokeFilter);
+            }
             country.firstHoverEntered.RemoveListener(Enter);
             country.lastHoverExited.RemoveListener(Exit);
             country.selectEntered.RemoveListener(Select);
