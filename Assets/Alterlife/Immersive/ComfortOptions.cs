@@ -97,7 +97,7 @@ namespace Alterlife.Immersive
             {
                 label.text = leftController.smoothMotionEnabled
                     ? "MOVEMENT: SMOOTH\nLeft stick to walk • Right stick to teleport\nSelect to use teleport only"
-                    : "MOVEMENT: TELEPORT\nPush stick forward • Aim at floor • Release\nSelect for optional smooth movement";
+                    : "MOVE FREELY\nWalk within your play area.\nPush stick forward, aim at floor, release to teleport.\nSelect for optional smooth movement.";
             }
 
             if (postureLabel)

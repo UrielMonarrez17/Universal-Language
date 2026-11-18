@@ -76,6 +76,8 @@ namespace Alterlife.Immersive.Editor
         static IEnumerator Check()
         {
             var session = UnityEngine.Object.FindAnyObjectByType<LearningSession>(); session.PersistenceEnabled = false; session.ResetInMemory();
+            var movement = CheckTeleport(new Vector3(1.6f, 0, 3.5f));
+            while (movement.MoveNext()) yield return null;
             var globe = UnityEngine.Object.FindAnyObjectByType<AnchoredGlobe>();
             var before = globe.transform.rotation; globe.enabled = false;
             globe.ApplyRotation(Quaternion.Euler(40, 60, 25), Quaternion.identity, before);
@@ -96,6 +98,8 @@ namespace Alterlife.Immersive.Editor
             Assert(Vector2.Distance(new Vector2(head.x, head.z), new Vector2(0, 7.8f)) < .05f, "Book scene spawns in front of the desk");
             Assert(UnityEngine.Object.FindObjectsByType<Unity.XR.CoreUtils.XROrigin>().Length == 1, "Book scene has one XR rig");
             Assert(UnityEngine.Object.FindAnyObjectByType<InteractiveBook>() != null, "Existing book preserved");
+            movement = CheckTeleport(new Vector3(1, 0, 7.6f));
+            while (movement.MoveNext()) yield return null;
             var book = UnityEngine.Object.FindAnyObjectByType<InteractiveBook>(); book.Open();
             float deadline = Time.time + 1.5f; while (Time.time < deadline) yield return null;
             Assert(book.IsOpen, "Book opens after scene transition");
@@ -103,6 +107,8 @@ namespace Alterlife.Immersive.Editor
             Assert(book.CurrentSpread == 1, "Physical pages still turn in standalone book scene");
             foreach (var t in UnityEngine.Object.FindObjectsByType<Transform>(FindObjectsInactive.Include)) AssertNoMissing(t.gameObject);
             var navigator = UnityEngine.Object.FindAnyObjectByType<ExperienceNavigator>();
+            navigator.Select(session.catalog.First(e => e.id == "apartment"));
+            Assert(navigator.Selected == null && !navigator.confirmControl.activeSelf, "Unimplemented chapters cannot be selected in beta");
             navigator.Select(session.catalog.First(e => e.id == "restaurant"));
             navigator.Confirm();
             while (SceneManager.GetActiveScene().path != ParisPrototypeBuilder.ScenePath) yield return null;
@@ -156,9 +162,9 @@ namespace Alterlife.Immersive.Editor
             progress.milestones.Remove("read-menu"); progress.milestones.Add("retired-objective");
             Assert(!session.GetProgress(eval.experience).completed && Mathf.Approximately(progress.progress, 5f / 6), "Old save objectives cannot falsely complete a changed lesson");
             session.RecordMilestone(eval.experience, "read-menu", false);
-            eval.BeginPractice(); Assert(eval.Stage == RestaurantStage.Complete, "Offline practice does not pretend to be AI");
             View(new Vector3(.4f, 1.7f, -.8f), new Vector3(1.4f, 1.4f, 1.4f));
             yield return null; yield return null; Capture("03-evaluation-result");
+            eval.BeginPractice(); Assert(eval.Stage == RestaurantStage.Welcome, "Offline practice restarts guided conversation without pretending to be AI");
             eval.Begin(); eval.InspectMenu();
             foreach (string line in new[] { "Bonjour merci", "Je suis prete a commander", "Que recommandez vous", "Un croque monsieur", "Un cafe", "Oui c'est ca" }) encounter.OnVoiceTranscriptionReceived(line);
             Assert(eval.Stage == RestaurantStage.Complete && eval.CompletedObjectives == 6 && eval.AssistedObjectives == 0, "Alternative coffee branch and accent-insensitive answers work without assistance");
@@ -173,6 +179,21 @@ namespace Alterlife.Immersive.Editor
             while (SceneManager.GetActiveScene().path != SceneJourney.WorldScene) yield return null;
             yield return null; yield return null;
             Assert(UnityEngine.Object.FindAnyObjectByType<AnchoredGlobe>() && !UnityEngine.Object.FindAnyObjectByType<InteractiveBook>(), "Book return control loads world selection without a duplicate room");
+        }
+        static IEnumerator CheckTeleport(Vector3 destination)
+        {
+            var rig = UnityEngine.Object.FindAnyObjectByType<Unity.XR.CoreUtils.XROrigin>();
+            var provider = UnityEngine.Object.FindAnyObjectByType<UnityEngine.XR.Interaction.Toolkit.Locomotion.Teleportation.TeleportationProvider>();
+            var floor = UnityEngine.Object.FindAnyObjectByType<ClearTeleportArea>();
+            var original = rig.Camera.transform.position; original.y = rig.transform.position.y;
+            Assert(floor && floor.enabled && floor.IsClear(destination), "Menu floor accepts a clear teleport destination");
+            foreach (var point in new[] { destination, original })
+            {
+                Assert(provider.QueueTeleportRequest(new UnityEngine.XR.Interaction.Toolkit.Locomotion.Teleportation.TeleportRequest { destinationPosition = point }), "Menu teleport request accepted");
+                float until = Time.time + .5f; while (Time.time < until) yield return null;
+                var head = rig.Camera.transform.position;
+                Assert(Vector2.Distance(new Vector2(head.x, head.z), new Vector2(point.x, point.z)) < .05f, "Menu teleport moves the tracked camera to the requested floor position");
+            }
         }
         static void AssertNoMissing(GameObject go) { if (GameObjectUtility.GetMonoBehavioursWithMissingScriptCount(go) > 0) throw new Exception("Missing script: " + go.name); }
         static void SetupPreview()

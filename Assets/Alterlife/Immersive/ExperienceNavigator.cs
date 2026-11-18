@@ -15,8 +15,17 @@ namespace Alterlife.Immersive
         public ExperienceDefinition Selected { get; private set; }
         public event System.Action SelectionChanged;
         public bool IsPreparing => preparation.activeSelf;
+        public bool CanSelect(ExperienceDefinition definition) => definition && session &&
+            !string.IsNullOrWhiteSpace(definition.scenePath) && Application.CanStreamedLevelBeLoaded(definition.scenePath) &&
+            session.GetProgress(definition).unlocked;
         public void Select(ExperienceDefinition definition)
         {
+            if (!CanSelect(definition))
+            {
+                ClearPreview();
+                selectionText.text = (definition ? definition.displayName : "Experience") + "\nCOMING SOON\nNot included in this beta.";
+                return;
+            }
             if (!session.SelectExperience(definition)) return;
             Selected = definition;
             selectionText.text = "SELECTED · " + definition.displayName + "\nDifficulty: " + definition.difficulty + "/5\n" + definition.description;
@@ -34,7 +43,7 @@ namespace Alterlife.Immersive
         }
         public void Confirm()
         {
-            if (!Selected || !session.FranceSelected || !session.GetProgress(Selected).unlocked) return;
+            if (!CanSelect(Selected) || !session.FranceSelected) return;
             session.Save();
             if (!string.IsNullOrWhiteSpace(Selected.scenePath) && Application.CanStreamedLevelBeLoaded(Selected.scenePath))
             {

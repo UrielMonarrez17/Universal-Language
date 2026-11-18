@@ -93,6 +93,9 @@ namespace Alterlife.Immersive.Editor
         [MenuItem("Alterlife/Quest/Build Development APK")]
         public static void BuildDevelopmentApk() => BuildQuestApk(autoRun: false);
 
+        [MenuItem("Alterlife/Quest/Build Quest 2 Beta APK")]
+        public static void BuildBetaApk() => BuildQuestApk(autoRun: false, development: false);
+
         [MenuItem("Alterlife/Quest/Build & Run (via ADB)")]
         public static void BuildAndRun() => BuildQuestApk(autoRun: true);
 
@@ -210,7 +213,7 @@ namespace Alterlife.Immersive.Editor
             return passed;
         }
 
-        static void BuildQuestApk(bool autoRun)
+        static void BuildQuestApk(bool autoRun, bool development = true)
         {
             if (!Application.isBatchMode && !EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
                 return;
@@ -225,19 +228,21 @@ namespace Alterlife.Immersive.Editor
             ValidateQuestReadiness(throwOnError: true);
 
             Directory.CreateDirectory(BuildOutputDir);
-            string[] scenes = EditorBuildSettings.scenes
+            string[] scenes = development ? EditorBuildSettings.scenes
                 .Where(s => s != null && s.enabled && !string.IsNullOrEmpty(s.path))
                 .Select(s => s.path)
-                .ToArray();
+                .ToArray() : RequiredScenes;
 
-            var options = BuildOptions.Development | BuildOptions.AllowDebugging | BuildOptions.CompressWithLz4;
+            var options = development ? BuildOptions.Development | BuildOptions.AllowDebugging | BuildOptions.CompressWithLz4 : BuildOptions.CompressWithLz4HC;
+            string output = development ? ApkOutputPath : "Builds/Quest/UniversalLanguage-Quest2-Beta.apk";
+            EditorUserBuildSettings.buildAppBundle = false;
             if (autoRun)
                 options |= BuildOptions.AutoRunPlayer;
 
             var buildPlayerOptions = new BuildPlayerOptions
             {
                 scenes = scenes,
-                locationPathName = ApkOutputPath,
+                locationPathName = output,
                 target = BuildTarget.Android,
                 targetGroup = BuildTargetGroup.Android,
                 options = options,
@@ -249,7 +254,8 @@ namespace Alterlife.Immersive.Editor
             if (summary.result == BuildResult.Succeeded)
             {
                 double sizeMb = summary.totalSize / (1024.0 * 1024.0);
-                Debug.Log($"ALTERLIFE_QUEST_BUILD_SUCCEEDED: {ApkOutputPath} ({sizeMb:F2} MB, {summary.totalTime.TotalSeconds:F1}s, warnings={summary.totalWarnings})");
+                Debug.Log($"ALTERLIFE_QUEST_BUILD_SUCCEEDED: {output} ({sizeMb:F2} MB, {summary.totalTime.TotalSeconds:F1}s, warnings={summary.totalWarnings})");
+                File.WriteAllText(Path.Combine(BuildOutputDir, "build-summary.txt"), $"{summary.result}\n{output}\n{PlayerSettings.bundleVersion}\nARM64 IL2CPP\n{summary.totalSize} bytes\n{summary.totalTime.TotalSeconds:F1} seconds\n{summary.totalErrors} errors, {summary.totalWarnings} warnings\n" + string.Join("\n", scenes));
             }
             else
             {
@@ -272,6 +278,18 @@ namespace Alterlife.Immersive.Editor
             var origins = UnityEngine.Object.FindObjectsByType<XROrigin>(FindObjectsInactive.Include);
             if (origins.Length != 1)
                 issues.Add($"{scenePath}: Expected 1 XROrigin, found {origins.Length}.");
+            foreach (var origin in origins)
+            {
+                var pose = origin.Camera ? origin.Camera.GetComponent<UnityEngine.InputSystem.XR.TrackedPoseDriver>() : null;
+                if (!pose || !pose.enabled || !origin.Camera.enabled || pose.trackingType != UnityEngine.InputSystem.XR.TrackedPoseDriver.TrackingType.RotationAndPosition)
+                    issues.Add($"{scenePath}: Camera requires an enabled position-and-rotation tracked pose driver.");
+            }
+            foreach (var simulator in UnityEngine.Object.FindObjectsByType<UnityEngine.XR.Interaction.Toolkit.Inputs.Simulation.XRDeviceSimulator>(FindObjectsInactive.Include))
+                if (!simulator.CompareTag("EditorOnly")) issues.Add($"{scenePath}: Desktop XR simulator must be EditorOnly for device builds.");
+            var teleport = UnityEngine.Object.FindAnyObjectByType<UnityEngine.XR.Interaction.Toolkit.Locomotion.Teleportation.TeleportationProvider>();
+            var floor = UnityEngine.Object.FindAnyObjectByType<ClearTeleportArea>();
+            if (!teleport || !teleport.enabled || !floor || !floor.enabled)
+                issues.Add($"{scenePath}: Enabled teleport provider and clear floor are required.");
 
             var modality = UnityEngine.Object.FindAnyObjectByType<XRInputModalityManager>(FindObjectsInactive.Include);
             if (modality == null)

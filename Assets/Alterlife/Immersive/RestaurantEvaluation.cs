@@ -66,6 +66,8 @@ namespace Alterlife.Immersive
                 objectiveText.text = "ORDER COMPLETE";
                 resultsText.text = "Conversation completed\n" + CompletedObjectives + "/6 objectives\n" + AssistedObjectives + " completed with assistance\n\n" + Dish + " + " + (Drink == "eau" ? "eau " + WaterType : Drink);
                 practiceControl.SetActive(true);
+                var practiceLabel = practiceControl.GetComponentInChildren<TMP_Text>();
+                if (practiceLabel) practiceLabel.text = voice && voice.IsConfigured ? "KEEP PRACTICING" : "PRACTICE AGAIN";
                 Feedback("You completed the conversation. Keep practicing or return to the book.");
                 if (companion) companion.Celebrate();
                 return;
@@ -180,7 +182,7 @@ namespace Alterlife.Immersive
         public void BeginPractice()
         {
             if (Stage != RestaurantStage.Complete) return;
-            if (!voice || !voice.IsConfigured) { Feedback("Conversation practice is unavailable offline. You can replay the guided conversation."); return; }
+            if (!voice || !voice.IsConfigured) { Begin(); Feedback("Guided practice restarted. Select HELP for response cards."); return; }
             Stage = RestaurantStage.Practice;
             objectiveText.text = "FREE CONVERSATION\nTalk about your visit to Paris. Your evaluation is already complete.";
             SetPrompt("Vous visitez Paris pour la première fois ?");

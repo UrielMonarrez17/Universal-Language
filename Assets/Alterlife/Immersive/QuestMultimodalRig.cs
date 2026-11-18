@@ -32,6 +32,7 @@ namespace Alterlife.Immersive
             DisableHandTeleportation();
 #if !UNITY_EDITOR
             DisableSimulatorInPlayer();
+            if (!GetComponent<QuestTrackingDiagnostics>()) gameObject.AddComponent<QuestTrackingDiagnostics>();
 #endif
         }
 
