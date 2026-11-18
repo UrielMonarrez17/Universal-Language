@@ -1,134 +1,252 @@
-using UnityEngine;
-using UnityEngine.UI;
+using System.Collections.Generic;
 using TMPro;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+using UnityEngine.XR;
 
 namespace Alterlife.Immersive
 {
     /// <summary>
-    /// Diegetic VR Wrist Menu attached to the non-dominant hand.
-    /// Provides comfort controls (Day/Night, Seated/Standing calibration)
-    /// and quick access to the pet companion and Hub navigation.
+    /// Minimalist Left-Wrist Menu that tracks either the Left Controller or Left Hand (depending on active modality).
+    /// Displays when looking at the inner wrist (like a watch) OR toggled via the Left Controller X button.
+    /// Houses Movement Mode, Posture (Standing/Seated), Return to Previous Scene (hidden in ImmersiveHub),
+    /// and Paris-only quick actions (Fox Help & Restart Conversation).
     /// </summary>
     public sealed class WristMenuController : MonoBehaviour
     {
         [Header("Tracking & Activation")]
-        [Tooltip("The main XR HMD Camera.")]
         [SerializeField] private Transform headCamera;
-        [Tooltip("Canvas root of the wrist menu.")]
+        [SerializeField] private QuestMultimodalRig multimodalRig;
         [SerializeField] private GameObject menuCanvas;
-        [Tooltip("Maximum angle (degrees) between wrist up vector and gaze to display menu.")]
-        [SerializeField] private float activationAngle = 50f;
+        [SerializeField] private float activationAngle = 52f;
         [SerializeField] private bool forceVisibleForDebug = false;
 
-        [Header("Day / Night Toggle")]
-        [SerializeField] private Material daySkyboxMaterial;
-        [SerializeField] private Material nightSkyboxMaterial;
-        [SerializeField] private Light directionalSunLight;
-        [SerializeField] private Color daySunColor = new Color(1f, 0.95f, 0.86f);
-        [SerializeField] private Color nightSunColor = new Color(0.2f, 0.25f, 0.45f);
-        [SerializeField] private TextMeshProUGUI dayNightStatusText;
-        private bool isNight = false;
+        [Header("Wrist Attachment Offsets")]
+        [SerializeField] private Vector3 controllerLocalOffset = new Vector3(0.02f, 0.055f, -0.04f);
+        [SerializeField] private Vector3 controllerLocalEuler = new Vector3(28f, 180f, 0f);
+        [SerializeField] private Vector3 handLocalOffset = new Vector3(0.0f, 0.065f, -0.06f);
+        [SerializeField] private Vector3 handLocalEuler = new Vector3(25f, 180f, 0f);
 
-        [Header("Comfort & Posture Calibration")]
-        [Tooltip("XR Origin or Camera Floor Offset object to adjust height for seated mode.")]
-        [SerializeField] private Transform xrOriginOffsetTransform;
-        [SerializeField] private float seatedHeightAdjustment = 0.4f;
-        [SerializeField] private TextMeshProUGUI seatedStandingStatusText;
-        private bool isSeatedMode = false;
-
-        [Header("Companion & Navigation Access")]
+        [Header("Scene Systems")]
+        [SerializeField] private ComfortOptions comfortOptions;
+        [SerializeField] private SceneJourney sceneJourney;
+        [SerializeField] private RestaurantEvaluation restaurantEvaluation;
         [SerializeField] private HummingbirdCompanion companion;
+
+        [Header("Buttons & Labels")]
+        [SerializeField] private TMP_Text movementStatusText;
+        [SerializeField] private TMP_Text seatedStandingStatusText;
+        [SerializeField] private GameObject returnButtonObject;
+        [SerializeField] private TMP_Text returnButtonText;
+        [SerializeField] private GameObject foxHelpButtonObject;
+        [SerializeField] private GameObject restartButtonObject;
+
+        private bool pinnedOpenByButton;
+        private bool wasLeftXPressed;
+        private bool isVisible = true;
+        private readonly List<Renderer> cachedRenderers = new List<Renderer>();
+        private readonly List<Collider> cachedColliders = new List<Collider>();
+        private readonly List<TMP_Text> cachedTexts = new List<TMP_Text>();
+
+        private void Awake()
+        {
+            if (menuCanvas == null)
+                menuCanvas = gameObject;
+
+            CacheVisualComponents();
+        }
 
         private void Start()
         {
             if (headCamera == null && Camera.main != null)
-            {
                 headCamera = Camera.main.transform;
-            }
+
+            if (multimodalRig == null)
+                multimodalRig = FindAnyObjectByType<QuestMultimodalRig>();
+
+            if (comfortOptions == null)
+                comfortOptions = FindAnyObjectByType<ComfortOptions>(FindObjectsInactive.Include);
+
+            if (sceneJourney == null)
+                sceneJourney = FindAnyObjectByType<SceneJourney>(FindObjectsInactive.Include);
+
+            if (restaurantEvaluation == null)
+                restaurantEvaluation = FindAnyObjectByType<RestaurantEvaluation>(FindObjectsInactive.Include);
 
             if (companion == null)
-            {
-                companion = FindAnyObjectByType<HummingbirdCompanion>();
-            }
+                companion = FindAnyObjectByType<HummingbirdCompanion>(FindObjectsInactive.Include);
 
-            UpdateDayNightUI();
-            UpdateSeatedStandingUI();
+            ConfigureSceneButtons();
+            RefreshLabels();
+            SetMenuVisible(forceVisibleForDebug);
         }
 
-        private void Update()
+        void CacheVisualComponents()
         {
-            if (menuCanvas == null || headCamera == null) return;
+            cachedRenderers.Clear();
+            cachedColliders.Clear();
+            cachedTexts.Clear();
 
-            if (forceVisibleForDebug)
+            if (menuCanvas == null) return;
+
+            foreach (var r in menuCanvas.GetComponentsInChildren<Renderer>(true))
             {
-                menuCanvas.SetActive(true);
+                if (r != null && r.GetComponent<TMP_Text>() == null)
+                    cachedRenderers.Add(r);
+            }
+            foreach (var c in menuCanvas.GetComponentsInChildren<Collider>(true))
+            {
+                if (c != null)
+                    cachedColliders.Add(c);
+            }
+            foreach (var t in menuCanvas.GetComponentsInChildren<TMP_Text>(true))
+            {
+                if (t != null)
+                    cachedTexts.Add(t);
+            }
+        }
+
+        void ConfigureSceneButtons()
+        {
+            string activePath = SceneManager.GetActiveScene().path;
+            bool isHub = activePath == SceneJourney.WorldScene || activePath.EndsWith("ImmersiveHub.unity");
+            bool isBook = activePath == SceneJourney.BookScene || activePath.EndsWith("BookSelection.unity");
+            bool isParis = restaurantEvaluation != null || activePath.EndsWith("Paris.unity");
+
+            if (returnButtonObject != null)
+            {
+                returnButtonObject.SetActive(!isHub);
+                if (returnButtonText != null)
+                    returnButtonText.text = isParis ? "BACK TO BOOK" : (isBook ? "BACK TO GLOBE" : "BACK");
+            }
+
+            if (foxHelpButtonObject != null)
+                foxHelpButtonObject.SetActive(isParis);
+
+            if (restartButtonObject != null)
+                restartButtonObject.SetActive(isParis);
+        }
+
+        private void LateUpdate()
+        {
+            if (headCamera == null && Camera.main != null)
+                headCamera = Camera.main.transform;
+
+            FollowActiveLeftWrist();
+            PollLeftControllerXButton();
+
+            if (menuCanvas == null || headCamera == null)
+                return;
+
+            if (forceVisibleForDebug || pinnedOpenByButton)
+            {
+                SetMenuVisible(true);
                 return;
             }
 
-            // Gaze / Wrist angle check: activate when looking at the inner wrist
-            Vector3 wristNormal = transform.up;
-            Vector3 gazeDir = (headCamera.position - transform.position).normalized;
-            float angle = Vector3.Angle(wristNormal, gazeDir);
-
-            bool shouldBeVisible = angle <= activationAngle;
-            if (menuCanvas.activeSelf != shouldBeVisible)
-            {
-                menuCanvas.SetActive(shouldBeVisible);
-            }
+            Vector3 wristFaceNormal = -transform.forward;
+            Vector3 toHead = (headCamera.position - transform.position).normalized;
+            float angle = Vector3.Angle(wristFaceNormal, toHead);
+            SetMenuVisible(angle <= activationAngle);
         }
 
-        /// <summary>
-        /// Toggles between Day and Night environments dynamically.
-        /// </summary>
-        public void ToggleDayNight()
+        void FollowActiveLeftWrist()
         {
-            isNight = !isNight;
+            if (multimodalRig == null)
+                return;
 
-            if (isNight && nightSkyboxMaterial != null)
+            bool useController = multimodalRig.ControllersActive;
+            GameObject target = useController ? multimodalRig.leftController : multimodalRig.leftHand;
+            if (target == null || !target.activeInHierarchy)
             {
-                RenderSettings.skybox = nightSkyboxMaterial;
-                if (directionalSunLight != null)
-                {
-                    directionalSunLight.color = nightSunColor;
-                    directionalSunLight.intensity = 0.3f;
-                }
-            }
-            else if (!isNight && daySkyboxMaterial != null)
-            {
-                RenderSettings.skybox = daySkyboxMaterial;
-                if (directionalSunLight != null)
-                {
-                    directionalSunLight.color = daySunColor;
-                    directionalSunLight.intensity = 1.0f;
-                }
+                target = useController ? multimodalRig.leftHand : multimodalRig.leftController;
+                useController = !useController;
             }
 
-            DynamicGI.UpdateEnvironment();
-            UpdateDayNightUI();
+            if (target == null)
+                return;
+
+            Vector3 localPos = useController ? controllerLocalOffset : handLocalOffset;
+            Vector3 localEuler = useController ? controllerLocalEuler : handLocalEuler;
+
+            transform.position = target.transform.TransformPoint(localPos);
+            transform.rotation = target.transform.rotation * Quaternion.Euler(localEuler);
         }
 
-        /// <summary>
-        /// Calibrates user height between seated and standing play.
-        /// </summary>
+        void PollLeftControllerXButton()
+        {
+            InputDevice leftDevice = InputDevices.GetDeviceAtXRNode(XRNode.LeftHand);
+            if (!leftDevice.isValid)
+            {
+                wasLeftXPressed = false;
+                return;
+            }
+
+            bool xPressed = leftDevice.TryGetFeatureValue(CommonUsages.primaryButton, out bool pressed) && pressed;
+            if (xPressed && !wasLeftXPressed)
+            {
+                pinnedOpenByButton = !pinnedOpenByButton;
+            }
+            wasLeftXPressed = xPressed;
+        }
+
+        void SetMenuVisible(bool visible)
+        {
+            if (isVisible == visible)
+                return;
+
+            isVisible = visible;
+
+            // Keep GameObjects active in hierarchy so scene queries/validations continue to find controls cleanly.
+            for (int i = 0; i < cachedRenderers.Count; i++)
+                if (cachedRenderers[i] != null) cachedRenderers[i].enabled = visible;
+
+            for (int i = 0; i < cachedColliders.Count; i++)
+                if (cachedColliders[i] != null) cachedColliders[i].enabled = visible;
+
+            for (int i = 0; i < cachedTexts.Count; i++)
+                if (cachedTexts[i] != null) cachedTexts[i].enabled = visible;
+        }
+
+        public void ToggleMovementMode()
+        {
+            if (comfortOptions != null)
+                comfortOptions.ToggleSmoothMovement();
+            RefreshLabels();
+        }
+
         public void ToggleSeatedStandingMode()
         {
-            isSeatedMode = !isSeatedMode;
-
-            if (xrOriginOffsetTransform != null)
-            {
-                Vector3 pos = xrOriginOffsetTransform.localPosition;
-                pos.y += isSeatedMode ? seatedHeightAdjustment : -seatedHeightAdjustment;
-                xrOriginOffsetTransform.localPosition = pos;
-            }
-
-            UpdateSeatedStandingUI();
+            if (comfortOptions != null)
+                comfortOptions.TogglePosture();
+            RefreshLabels();
         }
 
-        /// <summary>
-        /// Instantly recalls the companion to the player's shoulder.
-        /// </summary>
-        public void SummonCompanion()
+        public void ReturnToPreviousScene()
         {
+            if (restaurantEvaluation != null)
+            {
+                restaurantEvaluation.ReturnToBook();
+                return;
+            }
+
+            if (sceneJourney != null && sceneJourney.bookRoom)
+            {
+                sceneJourney.OpenWorld();
+                return;
+            }
+
+            ExperienceNavigator.ReturnToHub();
+        }
+
+        public void SummonFoxHelp()
+        {
+            if (restaurantEvaluation != null)
+            {
+                restaurantEvaluation.ToggleFoxHelp();
+                return;
+            }
+
             if (companion != null)
             {
                 companion.ResetToObserving();
@@ -136,27 +254,29 @@ namespace Alterlife.Immersive
             }
         }
 
-        /// <summary>
-        /// Returns the player to the Living Memory Album / World Hub.
-        /// </summary>
-        public void ReturnToHub()
+        public void RestartConversation()
         {
-            ExperienceNavigator.ReturnToHub();
+            if (restaurantEvaluation != null)
+                restaurantEvaluation.Begin();
         }
 
-        private void UpdateDayNightUI()
+        // Backwards-compatible aliases used by legacy Editor builders (e.g. ApartmentPilotBuilder)
+        public void ToggleDayNight() { }
+        public void SummonCompanion() => SummonFoxHelp();
+        public void ReturnToHub() => ReturnToPreviousScene();
+
+        public void RefreshLabels()
         {
-            if (dayNightStatusText != null)
+            if (movementStatusText != null)
             {
-                dayNightStatusText.text = isNight ? "Nuit (Night)" : "Jour (Day)";
+                bool smooth = comfortOptions != null && comfortOptions.leftController != null && comfortOptions.leftController.smoothMotionEnabled;
+                movementStatusText.text = smooth ? "MOVE: SMOOTH" : "MOVE: TELEPORT";
             }
-        }
 
-        private void UpdateSeatedStandingUI()
-        {
             if (seatedStandingStatusText != null)
             {
-                seatedStandingStatusText.text = isSeatedMode ? "Mode: Assis (Seated)" : "Mode: Debout (Standing)";
+                bool seated = comfortOptions != null && comfortOptions.IsSeatedMode;
+                seatedStandingStatusText.text = seated ? "POSTURE: SEATED" : "POSTURE: STANDING";
             }
         }
     }

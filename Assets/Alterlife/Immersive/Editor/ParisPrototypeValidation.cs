@@ -47,7 +47,7 @@ namespace Alterlife.Immersive.Editor
                 if (Application.isBatchMode) EditorApplication.Exit(SessionState.GetInt(Pending + ".result", 1));
             }
         }
-        static void Begin() { started = EditorApplication.timeSinceStartup; frame = -1; routine = null; SceneManager.sceneLoaded -= DisablePersistence; SceneManager.sceneLoaded += DisablePersistence; EditorApplication.update -= Tick; EditorApplication.update += Tick; }
+        static void Begin() { RestaurantVoiceBridge.DisableGeminiForTests = true; started = EditorApplication.timeSinceStartup; frame = -1; routine = null; SceneManager.sceneLoaded -= DisablePersistence; SceneManager.sceneLoaded += DisablePersistence; EditorApplication.update -= Tick; EditorApplication.update += Tick; }
         static void DisablePersistence(Scene scene, LoadSceneMode mode)
         {
             var session = UnityEngine.Object.FindAnyObjectByType<LearningSession>();
@@ -68,6 +68,7 @@ namespace Alterlife.Immersive.Editor
             catch (Exception ex) { Debug.LogException(ex); SessionState.SetInt(Pending + ".result", 1); }
             EditorApplication.update -= Tick;
             SceneManager.sceneLoaded -= DisablePersistence;
+            RestaurantVoiceBridge.DisableGeminiForTests = false;
             if (target) target.Release();
             EditorApplication.ExitPlaymode();
         }

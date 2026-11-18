@@ -183,3 +183,8 @@ AGENTS.md
 /[Dd]ocs/*
 !/Docs/ParisPrototype.md
 
+# Local Google AI Studio API Key (built locally into APK, never committed)
+Assets/Resources/GeminiLocalKey.txt
+Assets/Resources/GeminiLocalKey.txt.meta
+
+
