@@ -7,6 +7,8 @@ namespace Alterlife.Immersive
     {
         public Transform actor;
         public Transform speech;
+        [Tooltip("Legacy GLB assets face -Z; animated Blender FBX assets face +Z.")]
+        public bool invertFacing = true;
         Vector3 rest;
         Camera viewer;
         IEnumerator Start()
@@ -26,8 +28,9 @@ namespace Alterlife.Immersive
             if (viewer && actor)
             {
                 var facing = Vector3.ProjectOnPlane(viewer.transform.position - actor.position, Vector3.up);
-                // The imported barista faces the negative Z axis of the actor wrapper.
-                if (facing.sqrMagnitude > .001f) actor.rotation = Quaternion.LookRotation(-facing);
+                // Legacy GLB faces -Z of the actor wrapper; animated FBX faces +Z.
+                if (facing.sqrMagnitude > .001f)
+                    actor.rotation = Quaternion.LookRotation(invertFacing ? -facing : facing);
             }
             if (viewer && speech)
                 speech.rotation = Quaternion.LookRotation(speech.position - viewer.transform.position, Vector3.up);

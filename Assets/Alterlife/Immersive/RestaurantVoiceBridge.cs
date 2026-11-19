@@ -62,6 +62,9 @@ namespace Alterlife.Immersive
             isSynthesizingSpeech ||
             (speaker != null && speaker.isPlaying) ||
             (foxSpeaker != null && foxSpeaker.isPlaying);
+        public bool IsWaiterSpeaking => speaker != null && speaker.isPlaying;
+        public bool IsPlayerSpeaking => isCapturingUtterance;
+        public bool IsThinking => IsBusy || isSynthesizingSpeech;
         public string LastTranscript { get; private set; }
 
         const int SampleRate = 16000;

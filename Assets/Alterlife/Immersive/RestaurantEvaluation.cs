@@ -59,6 +59,9 @@ namespace Alterlife.Immersive
         public string FinalCoachingSummary { get; private set; } = "";
         public RestaurantTutor Tutor => tutor;
         public event Action<string> PromptChanged;
+        public event Action WaiterGreeted;
+        public event Action WaiterOrderServed;
+        public event Action WaiterGesturePrompted;
 
         readonly RestaurantTutor tutor = new RestaurantTutor();
         readonly List<string> requiredMilestoneIds = new List<string>();
@@ -151,6 +154,7 @@ namespace Alterlife.Immersive
 
             voice?.SeedWaiterOpening(openingFrench);
             SetWaiterPrompt(openingFrench, speak: true);
+            WaiterGreeted?.Invoke();
             SetPlayerTranscriptPlaceholder();
             RefreshJournalHeader();
 
@@ -418,6 +422,24 @@ namespace Alterlife.Immersive
                 companion.Celebrate();
 
             SetWaiterPrompt(turn.npcReplyFrench, speak: true);
+            EmitWaiterAnimationEvents(turn);
+        }
+
+        void EmitWaiterAnimationEvents(RestaurantVoiceBridge.GeminiWaiterTurn turn)
+        {
+            if (turn == null) return;
+            if (turn.servedOrder)
+                WaiterOrderServed?.Invoke();
+            else if (turn.issuedConfirmationChallenge || HasWaiterGestureKeyword(turn.npcReplyFrench))
+                WaiterGesturePrompted?.Invoke();
+        }
+
+        static bool HasWaiterGestureKeyword(string replyFrench)
+        {
+            if (string.IsNullOrWhiteSpace(replyFrench)) return false;
+            string lower = replyFrench.ToLowerInvariant();
+            return lower.Contains("carte") || lower.Contains("menu") || lower.Contains("voici")
+                || lower.Contains("conseille") || lower.Contains("recommande") || lower.Contains("spécialité");
         }
 
         void CompleteExam(RestaurantVoiceBridge.GeminiWaiterTurn finalTurn)
@@ -440,6 +462,7 @@ namespace Alterlife.Immersive
                 ? finalTurn.npcReplyFrench.Trim()
                 : "Merci beaucoup pour votre visite au Café de Paris ! Bonne journée et à bientôt !";
             SetWaiterPrompt(closingFrench, speak: true);
+            EmitWaiterAnimationEvents(finalTurn);
 
             FinalCoachingSummary = !string.IsNullOrWhiteSpace(finalTurn.finalSummaryEnglish)
                 ? finalTurn.finalSummaryEnglish.Trim()

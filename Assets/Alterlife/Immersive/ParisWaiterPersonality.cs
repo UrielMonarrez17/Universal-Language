@@ -13,8 +13,10 @@ namespace Alterlife.Immersive
     {
         [Header("Paris Café Acting State")]
         public bool includeGentleOrderConfirmationMistake = true;
+        public bool deferRotationToWaiterPresentation = true;
         private Quaternion initialWorldRotation;
         private bool hasInitialRotation;
+        private WaiterPresentation cachedPresentation;
 
         protected override void Awake()
         {
@@ -41,6 +43,7 @@ namespace Alterlife.Immersive
             worldKnowledge = RestaurantLesson.DefaultMenuCatalog;
 
             base.Awake();
+            cachedPresentation = FindAnyObjectByType<WaiterPresentation>();
             if (headOrBodyTransform != null)
             {
                 initialWorldRotation = headOrBodyTransform.rotation;
@@ -50,6 +53,11 @@ namespace Alterlife.Immersive
 
         protected override void LateUpdate()
         {
+            if (deferRotationToWaiterPresentation && cachedPresentation != null
+                && cachedPresentation.isActiveAndEnabled
+                && cachedPresentation.actor == headOrBodyTransform)
+                return;
+
             // Keep the barista GLB's authored X(-90) upright tilt intact while rotating smoothly in world Yaw toward the player.
             if (headOrBodyTransform == null)
                 return;
