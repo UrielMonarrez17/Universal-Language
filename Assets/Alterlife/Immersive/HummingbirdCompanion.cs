@@ -21,9 +21,10 @@ namespace Alterlife.Immersive
     }
 
     /// <summary>
-    /// Fox companion implementing Krashen's Low Affective Filter and i+1 scaffolded assistance.
-    /// Summoned automatically on prolonged user pause or with Left Controller Y button,
-    /// presenting up to 3 bilingual French/English options selectable by Trigger, Pinch, or Voice.
+    /// Fox companion implementing Krashen's Low Affective Filter and on-demand 2-level scaffolded assistance.
+    /// Summoned on demand via Left Controller Y button, Wrist Menu, or spoken English tutor questions:
+    /// - Level 1: Floating minimalist English hint / translation / tutor answer panel beside the Fox.
+    /// - Level 2: Up to 3 dynamic bilingual French/English cards (tap with Trigger/Pinch to hear Fox pronunciation).
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class HummingbirdCompanion : MonoBehaviour
@@ -45,9 +46,13 @@ namespace Alterlife.Immersive
         [SerializeField] private ParticleSystem auraParticles;
         [SerializeField] private ParticleSystem goldCelebrationParticles;
 
-        [Header("Floating 3D Vocab Label (Level 1)")]
+        [Header("Floating 3D Vocab Label (Legacy Prop Hint)")]
         [SerializeField] private GameObject vocabLabelRoot;
         [SerializeField] private TextMeshPro vocabLabelText;
+
+        [Header("Floating Level 1 / Tutor Hint Panel")]
+        [SerializeField] private GameObject hintPanelRoot;
+        [SerializeField] private TMP_Text hintPanelText;
 
         [Header("Dialogue Cards Container (Level 2 Rescue - 3 Options)")]
         [SerializeField] private GameObject dialogueCardsRoot;
@@ -67,7 +72,10 @@ namespace Alterlife.Immersive
         [SerializeField] private AudioClip celebrateClip;
 
         public CompanionState CurrentState { get; private set; } = CompanionState.Observing;
+        public bool IsShowingLevel1 => CurrentState == CompanionState.HintLevel1;
         public bool IsShowingHelp => CurrentState == CompanionState.RescueLevel2;
+        public bool IsShowingAnyHelp => CurrentState == CompanionState.HintLevel1 || CurrentState == CompanionState.RescueLevel2;
+        public AudioSource AudioSource => audioSource != null ? audioSource : (audioSource = GetComponent<AudioSource>());
 
         public event Action HelpRequestedByButton;
 
@@ -181,32 +189,14 @@ namespace Alterlife.Immersive
                             transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(toHead, Vector3.up), Time.deltaTime * rotationDamping);
                         }
                     }
+                    else
+                    {
+                        PositionFoxBesidePanel(yawRotation, new Vector3(-0.36f, 0.08f, -0.04f));
+                    }
                     break;
 
                 case CompanionState.RescueLevel2:
-                    Vector3 foxTarget = hasRescueAnchor
-                        ? rescueAnchorPos + (rescueAnchorRot * new Vector3(-.34f,.15f,-.05f))
-                        : headCamera.position + (yawRotation * new Vector3(-0.35f, -0.05f, 0.85f));
-                    foxTarget.y += Mathf.Sin(Time.time * bobbingSpeed) * (bobbingAmplitude * 0.45f);
-                    transform.position = Vector3.Lerp(transform.position, foxTarget, Time.deltaTime * (followDamping * 1.3f));
-
-                    Vector3 toUser = headCamera.position - transform.position;
-                    toUser.y = 0f;
-                    if (toUser.sqrMagnitude > 0.01f)
-                    {
-                        transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(toUser, Vector3.up), Time.deltaTime * rotationDamping);
-                    }
-                    // The imported fox's pivot is offset from its visible geometry.
-                    Bounds bounds = default;
-                    bool found = false;
-                    foreach (var part in foxRenderers)
-                    {
-                        if (!part || !part.enabled || !part.gameObject.activeInHierarchy ||
-                            (!(part is SkinnedMeshRenderer) && !(part is MeshRenderer)) || part.GetComponent<TMP_Text>()) continue;
-                        if (!found) { bounds = part.bounds; found = true; }
-                        else bounds.Encapsulate(part.bounds);
-                    }
-                    if (found) transform.position += foxTarget - bounds.center;
+                    PositionFoxBesidePanel(yawRotation, new Vector3(-0.34f, 0.15f, -0.05f));
                     break;
 
                 case CompanionState.Celebrating:
@@ -224,6 +214,37 @@ namespace Alterlife.Immersive
             }
         }
 
+        private void PositionFoxBesidePanel(Quaternion yawRotation, Vector3 localOffset)
+        {
+            Vector3 foxTarget = hasRescueAnchor
+                ? rescueAnchorPos + (rescueAnchorRot * localOffset)
+                : headCamera.position + (yawRotation * new Vector3(-0.35f, -0.05f, 0.85f));
+            foxTarget.y += Mathf.Sin(Time.time * bobbingSpeed) * (bobbingAmplitude * 0.45f);
+            transform.position = Vector3.Lerp(transform.position, foxTarget, Time.deltaTime * (followDamping * 1.3f));
+
+            Vector3 toUser = headCamera.position - transform.position;
+            toUser.y = 0f;
+            if (toUser.sqrMagnitude > 0.01f)
+            {
+                transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(toUser, Vector3.up), Time.deltaTime * rotationDamping);
+            }
+
+            // The imported fox's pivot is offset from its visible geometry.
+            Bounds bounds = default;
+            bool found = false;
+            if (foxRenderers != null)
+            {
+                foreach (var part in foxRenderers)
+                {
+                    if (!part || !part.enabled || !part.gameObject.activeInHierarchy ||
+                        (!(part is SkinnedMeshRenderer) && !(part is MeshRenderer)) || part.GetComponent<TMP_Text>()) continue;
+                    if (!found) { bounds = part.bounds; found = true; }
+                    else bounds.Encapsulate(part.bounds);
+                }
+            }
+            if (found) transform.position += foxTarget - bounds.center;
+        }
+
         private void UpdateStateBehavior()
         {
             if (vocabLabelRoot != null && vocabLabelRoot.activeSelf && headCamera != null)
@@ -235,17 +256,21 @@ namespace Alterlife.Immersive
                 }
             }
 
-            if (dialogueCardsRoot != null && dialogueCardsRoot.activeSelf && headCamera != null)
+            GameObject activeFloatingPanel =
+                (dialogueCardsRoot != null && dialogueCardsRoot.activeSelf) ? dialogueCardsRoot :
+                (hintPanelRoot != null && hintPanelRoot.activeSelf) ? hintPanelRoot : null;
+
+            if (activeFloatingPanel != null && headCamera != null)
             {
                 if (!hasRescueAnchor || Vector3.Angle(headCamera.forward, rescueAnchorPos - headCamera.position) > 50f)
                     CaptureRescueAnchor();
 
-                dialogueCardsRoot.transform.position = Vector3.Lerp(
-                    dialogueCardsRoot.transform.position,
+                activeFloatingPanel.transform.position = Vector3.Lerp(
+                    activeFloatingPanel.transform.position,
                     rescueAnchorPos,
                     Time.deltaTime * 8f);
-                dialogueCardsRoot.transform.rotation = Quaternion.Slerp(
-                    dialogueCardsRoot.transform.rotation,
+                activeFloatingPanel.transform.rotation = Quaternion.Slerp(
+                    activeFloatingPanel.transform.rotation,
                     rescueAnchorRot,
                     Time.deltaTime * 8f);
             }
@@ -260,10 +285,10 @@ namespace Alterlife.Immersive
             rescueAnchorPos = headCamera.position + forwardYaw * 0.98f + Vector3.down * 0.06f;
             hasRescueAnchor = true;
 
-            if (dialogueCardsRoot != null)
-            {
+            if (dialogueCardsRoot != null && dialogueCardsRoot.activeSelf)
                 dialogueCardsRoot.transform.SetPositionAndRotation(rescueAnchorPos, rescueAnchorRot);
-            }
+            if (hintPanelRoot != null && hintPanelRoot.activeSelf)
+                hintPanelRoot.transform.SetPositionAndRotation(rescueAnchorPos, rescueAnchorRot);
         }
 
         public void ShowHintLevel1(Transform targetProp, string frenchWord)
@@ -271,6 +296,26 @@ namespace Alterlife.Immersive
             activeHintObject = targetProp;
             if (vocabLabelText != null) vocabLabelText.text = frenchWord;
             SetState(CompanionState.HintLevel1);
+            PlaySound(chirpHintClip);
+        }
+
+        /// <summary>
+        /// Displays the minimalist Level 1 subtle hint or live Fox English tutor reply floating beside the Fox.
+        /// </summary>
+        public void ShowHintPanel(string formattedEnglishHint)
+        {
+            activeHintObject = null;
+            if (hintPanelText != null)
+                hintPanelText.text = formattedEnglishHint ?? "";
+
+            hasRescueAnchor = false;
+            SetState(CompanionState.HintLevel1);
+            CaptureRescueAnchor();
+            if (hasRescueAnchor)
+            {
+                var target = rescueAnchorPos + rescueAnchorRot * new Vector3(-0.36f, 0.08f, -0.04f);
+                transform.position = target;
+            }
             PlaySound(chirpHintClip);
         }
 
@@ -290,14 +335,15 @@ namespace Alterlife.Immersive
         }
 
         /// <summary>
-        /// Displays up to 3 bilingual French/English options floating comfortably in front of the player.
-        /// Selectable by Trigger/Pinch on any card or by speaking the French phrase aloud.
+        /// Displays up to 3 dynamic bilingual French/English options floating comfortably in front of the player.
+        /// Tapping a card models pronunciation with the Fox's voice; the player speaks aloud to reply to Lucas.
         /// </summary>
         public void ShowRescueOptions(FoxHelpOption[] options, Action<int> onSelectOption)
         {
             if (options == null || options.Length == 0)
                 return;
 
+            activeHintObject = null;
             onCardASelected = options.Length > 0 ? () => onSelectOption?.Invoke(0) : null;
             onCardBSelected = options.Length > 1 ? () => onSelectOption?.Invoke(1) : null;
             onCardCSelected = options.Length > 2 ? () => onSelectOption?.Invoke(2) : null;
@@ -307,11 +353,11 @@ namespace Alterlife.Immersive
             ApplyCardVisual(cardOptionCControl, cardOptionCText, options.Length > 2 ? options[2] : default, options.Length > 2);
 
             hasRescueAnchor = false;
-            CaptureRescueAnchor();
             SetState(CompanionState.RescueLevel2);
+            CaptureRescueAnchor();
             if (hasRescueAnchor)
             {
-                var target = rescueAnchorPos + rescueAnchorRot * new Vector3(-.34f,.15f,-.05f);
+                var target = rescueAnchorPos + rescueAnchorRot * new Vector3(-0.34f, 0.15f, -0.05f);
                 transform.position = target;
             }
             PlaySound(chirpHintClip);
@@ -337,28 +383,14 @@ namespace Alterlife.Immersive
             var header = dialogueCardsRoot ? dialogueCardsRoot.transform.Find("Fox help header") : null;
             if (header && header.TryGetComponent<TMP_Text>(out var text))
             {
-                text.rectTransform.sizeDelta = new Vector2(.9f,.23f);
+                text.rectTransform.sizeDelta = new Vector2(0.94f, 0.23f);
                 text.text = message;
             }
         }
 
-        public void SelectCardA()
-        {
-            var callback = onCardASelected;
-            callback?.Invoke();
-        }
-
-        public void SelectCardB()
-        {
-            var callback = onCardBSelected;
-            callback?.Invoke();
-        }
-
-        public void SelectCardC()
-        {
-            var callback = onCardCSelected;
-            callback?.Invoke();
-        }
+        public void SelectCardA() => onCardASelected?.Invoke();
+        public void SelectCardB() => onCardBSelected?.Invoke();
+        public void SelectCardC() => onCardCSelected?.Invoke();
 
         public void Celebrate()
         {
@@ -383,17 +415,19 @@ namespace Alterlife.Immersive
         {
             CurrentState = newState;
 
-            bool isHint = newState == CompanionState.HintLevel1;
+            bool isPropHint = newState == CompanionState.HintLevel1 && activeHintObject != null;
+            bool isPanelHint = newState == CompanionState.HintLevel1 && activeHintObject == null;
             bool isRescue = newState == CompanionState.RescueLevel2;
             bool isCelebration = newState == CompanionState.Celebrating;
 
-            if (vocabLabelRoot != null) vocabLabelRoot.SetActive(isHint);
+            if (vocabLabelRoot != null) vocabLabelRoot.SetActive(isPropHint);
+            if (hintPanelRoot != null) hintPanelRoot.SetActive(isPanelHint);
             if (dialogueCardsRoot != null) dialogueCardsRoot.SetActive(isRescue);
 
             if (auraLight != null)
             {
                 auraLight.color = isCelebration ? goldCelebrationColor : cyanHintColor;
-                auraLight.intensity = (isHint || isRescue || isCelebration) ? 2.5f : 0.8f;
+                auraLight.intensity = (isPropHint || isPanelHint || isRescue || isCelebration) ? 2.5f : 0.8f;
             }
         }
 

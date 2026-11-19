@@ -12,48 +12,152 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 125ff35cb64354f4e90904181e5b8b3f, type: 3}
   m_Name: RestaurantLesson
   m_EditorClassIdentifier: Assembly-CSharp::Alterlife.Immersive.RestaurantLesson
+  scenarioName: "Le Caf\xE9 de Paris"
+  learnerLevel: "Intermediate (A2/B1 \xB7 Level 3/5)"
+  minAutonomousObjectives: 5
+  openingWaiterLineFrench: "Bonjour ! Bienvenue au Caf\xE9 de Paris. Installez-vous,
+    voici la carte."
+  openingWaiterLineEnglish: "Hello! Welcome to Le Caf\xE9 de Paris. Have a seat,
+    here is the menu."
+  openingHintKeywords:
+  - "Bonjour \u2014 Hello"
+  - "Merci beaucoup \u2014 Thank you very much"
+  - "La carte \u2014 The menu"
+  menuCatalog: "PLATS (Main Dishes):\n- Croque-monsieur (12 \u20AC): toasted ham
+    and melted Emmental cheese sandwich with a side salad.\n- Quiche lorraine (13
+    \u20AC): savory pastry tart with smoked bacon (lardons), eggs, and cream.\n-
+    Salade ni\xE7oise (11 \u20AC): fresh salad with tuna, tomatoes, hard-boiled egg,
+    olives, and green beans (can be made without tuna on request).\n- Soupe \xE0
+    l'oignon (10 \u20AC): traditional French onion soup topped with melted gruy\xE8re
+    cheese (vegetarian option).\n\nBOISSONS (Drinks):\n- Eau plate (3 \u20AC) / Eau
+    gazeuse (3 \u20AC): still or sparkling water.\n- Caf\xE9 / Espresso (3 \u20AC)
+    or Caf\xE9 cr\xE8me (4 \u20AC).\n- Th\xE9 (4 \u20AC): mint (menthe) or lemon
+    (citron) tea.\n- Jus d'orange press\xE9 (5 \u20AC): freshly squeezed orange juice.\n\nDESSERTS:\n-
+    Croissant au beurre (3 \u20AC): warm butter croissant.\n- Cr\xE8me br\xFBl\xE9e
+    (7 \u20AC): classic vanilla custard with caramelized sugar crust."
   lines:
   - milestoneId: greet-waiter
-    prompt: Bonjour ! Bienvenue. Voici le menu.
-    hint: Greet the waiter and say thank you.
-    example: Bonjour, merci beaucoup !
-    alternative: Bonjour et merci !
+    title: Polite Greeting & 'vous'
+    rubricCriteria: "Greet Lucas naturally in French (e.g. Bonjour/Bonsoir) and show
+      polite caf\xE9 etiquette using 'vous', 'merci', or 's'il vous pla\xEEt'."
+    prompt: "Bonjour ! Bienvenue au Caf\xE9 de Paris. Installez-vous, voici la carte."
+    hint: Greet Lucas politely in French.
+    example: Bonjour monsieur, merci beaucoup !
+    alternative: Bonjour ! Merci pour la carte.
+    requiresMenuInspection: 0
+    defaultKeywords:
+    - "Bonjour \u2014 Hello"
+    - "Merci \u2014 Thank you"
+    - "Vous \u2014 Polite 'you'"
     voice: {fileID: 0}
   - milestoneId: read-menu
-    prompt: "Je vous laisse regarder le menu. Dites-moi quand vous \xEAtes pr\xEAt."
-    hint: Read the physical menu, then say you are ready to order.
-    example: "Je suis pr\xEAt \xE0 commander."
-    alternative: "Je suis pr\xEAte \xE0 commander."
+    title: "Inspect the Caf\xE9 Menu"
+    rubricCriteria: The player MUST physically pick up/inspect the menu on the table
+      (menuInspected == true) and engage with it in French (e.g. saying they are
+      ready, commenting on dishes, or referencing items from the menu).
+    prompt: "Je vous laisse regarder la carte. Dites-moi quand vous \xEAtes pr\xEAt."
+    hint: Pick up the physical menu on the table and let Lucas know when you're ready.
+    example: "Merci, j'ai regard\xE9 la carte et je suis pr\xEAt \xE0 commander."
+    alternative: "Tout a l'air d\xE9licieux ! Je suis pr\xEAte."
+    requiresMenuInspection: 1
+    defaultKeywords:
+    - "La carte \u2014 Menu"
+    - "Pr\xEAt(e) \u2014 Ready"
+    - "Commander \u2014 To order"
     voice: {fileID: 0}
   - milestoneId: ask-about-menu
-    prompt: Vous voulez un conseil ?
-    hint: Ask the waiter for a recommendation.
-    example: Oui, qu'est-ce que vous me conseillez ?
-    alternative: Qu'est-ce que vous recommandez ?
+    title: Ask About Recommendations or Details
+    rubricCriteria: 'Ask Lucas a genuine question in French about the menu: a recommendation,
+      today''s favorite, ingredients, dietary preferences (e.g. vegetarian/allergies),
+      or prices.'
+    prompt: "Vous voulez un conseil sur nos sp\xE9cialit\xE9s ?"
+    hint: Ask for a recommendation, ingredients, or prices in French.
+    example: Qu'est-ce que vous me conseillez aujourd'hui ?
+    alternative: Qu'est-ce qu'il y a dans la quiche lorraine ?
+    requiresMenuInspection: 0
+    defaultKeywords:
+    - "Vous conseillez \u2014 You recommend"
+    - "Ingr\xE9dients \u2014 Ingredients"
+    - "Combien co\xFBte \u2014 How much is"
     voice: {fileID: 0}
   - milestoneId: place-order
-    prompt: "Je vous conseille le croque-monsieur. Il contient du jambon et du fromage.
-      Vous pr\xE9f\xE9rez un plat chaud ou une salade ?"
-    hint: Order one dish from the menu.
-    example: "Je voudrais un croque-monsieur, s'il vous pla\xEEt."
-    alternative: "Une salade, s'il vous pla\xEEt."
+    title: Order Food Naturally
+    rubricCriteria: "Order at least one food item from the caf\xE9 menu in natural
+      French (dish or pastry, optionally specifying preferences). Off-menu requests
+      should be politely redirected until a real caf\xE9 menu item is ordered."
+    prompt: Qu'est-ce qui vous ferait plaisir comme plat ?
+    hint: Order a dish from the menu in French.
+    example: "Je vais prendre une quiche lorraine, s'il vous pla\xEEt."
+    alternative: "Je voudrais une soupe \xE0 l'oignon, s'il vous pla\xEEt."
+    requiresMenuInspection: 0
+    defaultKeywords:
+    - "Je voudrais \u2014 I would like"
+    - "Je vais prendre \u2014 I'll have"
+    - "S'il vous pla\xEEt \u2014 Please"
     voice: {fileID: 0}
-  - milestoneId: respond-to-waiter
-    prompt: Et comme boisson ?
-    hint: Order water or coffee.
-    example: "De l'eau, s'il vous pla\xEEt."
-    alternative: "Un caf\xE9, s'il vous pla\xEEt."
-    voice: {fileID: 0}
-  - milestoneId: respond-to-waiter
-    prompt: De l'eau plate ou gazeuse ?
-    hint: Choose still or sparkling water.
-    example: "Plate, s'il vous pla\xEEt."
-    alternative: "Gazeuse, s'il vous pla\xEEt."
+  - milestoneId: order-drink
+    title: Order a Beverage
+    rubricCriteria: "Order a drink from the caf\xE9 menu in natural French (e.g.
+      still/sparkling water, espresso/caf\xE9 cr\xE8me, mint/lemon tea, fresh orange
+      juice), clarifying preference if asked."
+    prompt: Et qu'est-ce que je vous sers comme boisson ?
+    hint: Order a beverage in French.
+    example: "Une eau gazeuse, s'il vous pla\xEEt."
+    alternative: "Je voudrais un caf\xE9 cr\xE8me, s'il vous pla\xEEt."
+    requiresMenuInspection: 0
+    defaultKeywords:
+    - "Boisson \u2014 Drink"
+    - "Eau plate / gazeuse \u2014 Still / sparkling"
+    - "Caf\xE9 cr\xE8me \u2014 Coffee with milk"
     voice: {fileID: 0}
   - milestoneId: confirm-order
-    prompt: "C'est bien \xE7a ?"
-    hint: Listen to the order. Confirm it or correct a mistake.
-    example: "Oui, c'est \xE7a. Merci !"
-    alternative: "Pouvez-vous r\xE9p\xE9ter, s'il vous pla\xEEt ?"
+    title: Catch & Correct Order Mix-Up
+    rubricCriteria: After Lucas summarizes the order with ONE subtle, natural mix-up
+      tailored to what the player ordered, the player must notice it and politely
+      correct or clarify their order in French. Blindly agreeing ('Oui') to the wrong
+      recap must NOT complete this goal.
+    prompt: "Alors, si j'ai bien not\xE9... C'est bien \xE7a ?"
+    hint: Listen carefully to Lucas's recap and politely correct any mistake.
+    example: "Pardon, j'avais demand\xE9 de l'eau plate, pas gazeuse."
+    alternative: "Non, excusez-moi, j'ai choisi une salade ni\xE7oise."
+    requiresMenuInspection: 0
+    defaultKeywords:
+    - "Pardon \u2014 Excuse me"
+    - "J'avais demand\xE9 \u2014 I asked for"
+    - "En fait \u2014 Actually"
+    voice: {fileID: 0}
+  - milestoneId: table-chat
+    title: "Caf\xE9 Follow-Up & Small Talk"
+    rubricCriteria: "Once the order is served ('Voici votre commande, bon app\xE9tit
+      !'), respond naturally in French to Lucas's friendly check-in (e.g. commenting
+      on the food/terrace, answering a brief question about their visit to Paris,
+      or requesting a dessert/napkin/extra)."
+    prompt: "Voici votre commande, bon app\xE9tit ! Tout vous pla\xEEt ? Vous aimez
+      le quartier ?"
+    hint: Chat briefly with Lucas in French after your order arrives.
+    example: "Merci beaucoup, c'est d\xE9licieux ! J'adore ce quartier."
+    alternative: "C'est tr\xE8s bon, merci ! Est-ce que je peux aussi avoir une cr\xE8me
+      br\xFBl\xE9e ?"
+    requiresMenuInspection: 0
+    defaultKeywords:
+    - "D\xE9licieux \u2014 Delicious"
+    - "Quartier \u2014 Neighborhood"
+    - "Autre chose \u2014 Anything else"
+    voice: {fileID: 0}
+  - milestoneId: ask-bill-farewell
+    title: Ask for the Bill & Farewell
+    rubricCriteria: "Politely ask for the check ('l'addition') and close the visit
+      with a courteous French farewell (e.g. Merci beaucoup, au revoir / bonne journ\xE9e)."
+    prompt: Est-ce que je peux vous apporter autre chose, ou l'addition ?
+    hint: Ask for the bill (l'addition) and say goodbye politely.
+    example: "L'addition, s'il vous pla\xEEt. Merci beaucoup et bonne journ\xE9e
+      !"
+    alternative: "Je voudrais payer, s'il vous pla\xEEt. Merci, au revoir !"
+    requiresMenuInspection: 0
+    defaultKeywords:
+    - "L'addition \u2014 The bill"
+    - "Payer \u2014 To pay"
+    - "Bonne journ\xE9e / Au revoir \u2014 Have a nice day / Goodbye"
     voice: {fileID: 0}
   challengeWaterConfirmation: 1
+  challengeOrderConfirmation: 1

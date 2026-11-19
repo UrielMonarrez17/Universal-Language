@@ -12,6 +12,7 @@ namespace Alterlife.Immersive
         public bool unlocked;
         [Range(0, 1)] public float progress;
         public int assistanceUses;
+        public bool requiresRetry;
         public List<string> milestones = new List<string>();
     }
 
@@ -76,14 +77,59 @@ namespace Alterlife.Immersive
             if (entry.milestones == null) entry.milestones = new List<string>();
             if (!entry.milestones.Contains(milestoneId)) entry.milestones.Add(milestoneId);
             if (usedAssistance) entry.assistanceUses++;
+            entry.requiresRetry = false;
             Recalculate(entry, definition);
             Save();
         }
+
+        public void RecordExamResult(
+            ExperienceDefinition definition,
+            IEnumerable<string> achievedMilestones,
+            int autonomousObjectives,
+            int level2AssistanceUses,
+            bool passed)
+        {
+            if (definition == null) return;
+            var entry = GetProgress(definition);
+            if (entry.milestones == null) entry.milestones = new List<string>();
+            var required = new HashSet<string>(definition.milestoneIds ?? Array.Empty<string>());
+            if (required.Count == 0) return;
+
+            entry.assistanceUses = Mathf.Max(0, level2AssistanceUses);
+
+            if (passed)
+            {
+                entry.requiresRetry = false;
+                if (achievedMilestones != null)
+                {
+                    foreach (var id in achievedMilestones)
+                        if (required.Contains(id) && !entry.milestones.Contains(id))
+                            entry.milestones.Add(id);
+                }
+                Recalculate(entry, definition);
+            }
+            else if (!entry.completed)
+            {
+                // Preserve incomplete status when autonomy threshold was not met.
+                entry.requiresRetry = true;
+                entry.completed = false;
+                float autonomousRatio = Mathf.Clamp01((float)Mathf.Max(0, autonomousObjectives) / required.Count);
+                entry.progress = Mathf.Min(autonomousRatio, (required.Count - 1f) / required.Count);
+            }
+
+            Save();
+        }
+
         static void Recalculate(ExperienceProgress entry, ExperienceDefinition definition)
         {
             if (entry.milestones == null) entry.milestones = new List<string>();
             var required = new HashSet<string>(definition.milestoneIds ?? Array.Empty<string>());
             if (required.Count == 0) return;
+            if (entry.requiresRetry && !entry.completed)
+            {
+                entry.progress = Mathf.Min(entry.progress, (required.Count - 1f) / required.Count);
+                return;
+            }
             int count = 0;
             foreach (var id in required) if (entry.milestones.Contains(id)) count++;
             entry.progress = (float)count / required.Count;

@@ -17,7 +17,8 @@ MonoBehaviour:
   thematicTitle: "Le Caf\xE9 du Quartier"
   country: France
   language: French
-  description: "Practice conversations in a caf\xE9 or restaurant."
+  description: "Have a natural French caf\xE9 conversation, catch a subtle order
+    mix-up, and ask for the bill."
   difficulty: 3
   unlockedByDefault: 1
   scenePath: Assets/Scenes/Paris.unity
@@ -26,5 +27,7 @@ MonoBehaviour:
   - read-menu
   - ask-about-menu
   - place-order
-  - respond-to-waiter
+  - order-drink
   - confirm-order
+  - table-chat
+  - ask-bill-farewell

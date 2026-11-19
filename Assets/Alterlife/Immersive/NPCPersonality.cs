@@ -1,8 +1,28 @@
+using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 
 namespace Alterlife.Immersive
 {
+    public sealed class RestaurantPromptContext
+    {
+        public RestaurantLesson lesson;
+        public IReadOnlyCollection<string> completedMilestones;
+        public bool menuInspected;
+        public string orderedFood;
+        public string orderedDrink;
+        public string orderedDessert;
+        public bool confirmationChallengeIssued;
+        public bool confirmationChallengeResolved;
+        public bool orderServed;
+        public bool isPracticeMode;
+        public bool foxLevel2Visible;
+        public FoxHelpOption[] activeFoxOptions;
+        public int autonomousObjectives;
+        public int level2AssistedObjectives;
+        public int totalTurns;
+    }
+
     /// <summary>
     /// Base personality and acting script for an AI-driven NPC powered by Google AI Studio (Gemini).
     /// Attach a specialized subclass per character to define voice, demeanor, roleplay rules, and behavior.
@@ -12,10 +32,12 @@ namespace Alterlife.Immersive
         [Header("Identity & Voice")]
         public string npcName = "NPC";
         public string roleTitle = "Local resident";
-        [Tooltip("Gemini prebuilt voice name (e.g. Puck, Charon, Kore, Fenrir, Aoede).")]
+        [Tooltip("Gemini prebuilt voice name for this NPC (e.g. Puck, Charon, Kore, Fenrir, Aoede).")]
         public string geminiVoiceName = "Puck";
+        [Tooltip("Distinct Gemini prebuilt voice name for the Fox companion tutor.")]
+        public string foxVoiceName = "Aoede";
         public string targetLanguage = "French (fr-FR)";
-        public string learnerLevel = "A1/A2 beginner";
+        public string learnerLevel = "A2/B1 intermediate (Level 3/5)";
 
         [Header("Personality & Acting")]
         [TextArea(3, 8)]
@@ -24,8 +46,8 @@ namespace Alterlife.Immersive
 
         [TextArea(3, 8)]
         public string actingBehavior =
-            "Speak naturally in short, clear French sentences suited to an adult beginner. " +
-            "Never judge or grade harshly; gently model natural phrasing in your reply.";
+            "Speak naturally in clear, authentic Parisian French suited to an intermediate learner. " +
+            "Never sound scripted or robotic; gently model natural phrasing in your reply.";
 
         [TextArea(3, 8)]
         public string worldKnowledge = "";
@@ -67,6 +89,19 @@ namespace Alterlife.Immersive
                 Time.deltaTime * lookAtPlayerSpeed);
         }
 
+        public virtual string BuildDynamicCafeSystemPrompt(RestaurantPromptContext context)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"You are {npcName}, {roleTitle}.");
+            sb.AppendLine($"Language to speak as NPC: {targetLanguage}. Learner level: {learnerLevel}.");
+            sb.AppendLine($"Personality: {personalityTraits}");
+            sb.AppendLine($"Acting behavior: {actingBehavior}");
+            if (!string.IsNullOrWhiteSpace(worldKnowledge))
+                sb.AppendLine($"Setting & details:\n{worldKnowledge}");
+            return sb.ToString();
+        }
+
+        // Retained for compatibility with any external utilities
         public virtual string BuildSystemPrompt(
             string currentStage,
             string dish,
@@ -75,21 +110,14 @@ namespace Alterlife.Immersive
             bool menuInspected,
             FoxHelpOption[] activeFoxOptions)
         {
-            var sb = new StringBuilder();
-            sb.AppendLine($"You are {npcName}, {roleTitle}.");
-            sb.AppendLine($"Language to speak: {targetLanguage}. Learner level: {learnerLevel}.");
-            sb.AppendLine($"Personality: {personalityTraits}");
-            sb.AppendLine($"Acting behavior: {actingBehavior}");
-            if (!string.IsNullOrWhiteSpace(worldKnowledge))
-                sb.AppendLine($"Setting & details: {worldKnowledge}");
-            sb.AppendLine($"Current scenario stage: {currentStage}. Menu inspected: {menuInspected}. Current dish: '{dish}', drink: '{drink}', waterType: '{waterType}'.");
-            if (activeFoxOptions != null && activeFoxOptions.Length > 0)
+            return BuildDynamicCafeSystemPrompt(new RestaurantPromptContext
             {
-                sb.AppendLine("Active Fox Companion rescue cards currently shown to the player:");
-                for (int i = 0; i < activeFoxOptions.Length; i++)
-                    sb.AppendLine($"  [{i}] \"{activeFoxOptions[i].french}\" ({activeFoxOptions[i].englishDescription})");
-            }
-            return sb.ToString();
+                orderedFood = dish,
+                orderedDrink = string.IsNullOrWhiteSpace(waterType) ? drink : $"{drink} {waterType}".Trim(),
+                menuInspected = menuInspected,
+                activeFoxOptions = activeFoxOptions,
+                foxLevel2Visible = activeFoxOptions != null && activeFoxOptions.Length > 0
+            });
         }
     }
 }

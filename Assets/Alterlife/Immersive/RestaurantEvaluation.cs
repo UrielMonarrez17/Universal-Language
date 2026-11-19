@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -10,8 +11,11 @@ namespace Alterlife.Immersive
     public enum RestaurantStage { Welcome, ReadMenu, Recommendation, Meal, Drink, Water, Confirmation, Complete, Practice }
 
     /// <summary>
-    /// Coordinates Paris restaurant communicative objectives, Gemini AI conversational replies,
-    /// deterministic validation fallback, and Fox companion 3-option bilingual rescue (voice or Trigger/Pinch).
+    /// Coordinates the non-linear Intermediate (Level 3/5) Paris café exam powered exclusively by Gemini AI:
+    /// - 8 communicative milestones evaluated organically in any natural conversational order.
+    /// - On-demand Fox Companion scaffolding (no silence auto-timer): Press Y -> Level 1 hint -> Level 2 cards -> Close,
+    ///   plus live spoken English tutor answers via Fox's own spatial voice.
+    /// - Autonomy passing threshold (>= 5/8 milestones without Level 2 rescue cards) + personalized Gemini final report.
     /// </summary>
     public sealed class RestaurantEvaluation : MonoBehaviour
     {
@@ -23,23 +27,48 @@ namespace Alterlife.Immersive
         public NPCPersonality waiterPersonality;
         public Transform menu;
         public TMP_Text speechText, feedbackText, objectiveText, resultsText;
+        [Tooltip("Floating panel displaying what the player just spoke (in French or to the Fox tutor).")]
+        public TMP_Text playerTranscriptText;
         public GameObject practiceControl, helpCards;
         public TMP_Text answerA, answerB, answerC;
         public RestaurantVoiceBridge voice;
 
         public RestaurantStage Stage { get; private set; }
-        public string Dish { get; private set; }
-        public string Drink { get; private set; }
-        public string WaterType { get; private set; }
+        public string OrderedFood { get; private set; } = "";
+        public string OrderedDrink { get; private set; } = "";
+        public string OrderedDessert { get; private set; } = "";
+        public string Dish => OrderedFood;
+        public string Drink => OrderedDrink;
+        public string WaterType { get; private set; } = "";
         public bool MenuInspected { get; private set; }
-        public int CompletedObjectives { get; private set; }
-        public int AssistedObjectives { get; private set; }
+        public bool ConfirmationChallengeIssued { get; private set; }
+        public bool ConfirmationChallengeResolved { get; private set; }
+        public bool OrderServed { get; private set; }
+        public int TotalObjectives => requiredMilestoneIds.Count;
+        public int CompletedObjectives => completedMilestones.Count;
+        public int AssistedObjectives => level2RescuedMilestones.Count;
+        public int AutonomousObjectives => Mathf.Max(0, completedMilestones.Count - level2RescuedMilestones.Count);
+        public int Level1HintCount { get; private set; }
+        public int MinAutonomousToPass => lesson != null
+            ? Mathf.Clamp(lesson.minAutonomousObjectives, 1, Mathf.Max(1, TotalObjectives))
+            : Mathf.Min(5, Mathf.Max(1, TotalObjectives));
+        public bool PassedExam => TotalObjectives > 0 && CompletedObjectives >= TotalObjectives && AutonomousObjectives >= MinAutonomousToPass;
         public int Attempts { get; private set; }
-        public string CurrentPrompt { get; private set; }
+        public string CurrentPrompt { get; private set; } = "";
+        public string LastPlayerTranscript { get; private set; } = "";
+        public string FinalCoachingSummary { get; private set; } = "";
+        public RestaurantTutor Tutor => tutor;
         public event Action<string> PromptChanged;
 
-        bool assisted, ready;
-        FoxHelpOption[] dynamicFoxOptions;
+        readonly RestaurantTutor tutor = new RestaurantTutor();
+        readonly List<string> requiredMilestoneIds = new List<string>();
+        readonly HashSet<string> completedMilestones = new HashSet<string>(StringComparer.Ordinal);
+        readonly HashSet<string> level1HintedMilestones = new HashSet<string>(StringComparer.Ordinal);
+        readonly HashSet<string> level2RescuedMilestones = new HashSet<string>(StringComparer.Ordinal);
+
+        bool ready;
+        bool usedLevel1ThisTurn;
+        bool usedLevel2ThisTurn;
 
         void Awake()
         {
@@ -55,431 +84,480 @@ namespace Alterlife.Immersive
 
         void Start() { Begin(); }
 
+        void RebuildRequiredMilestones()
+        {
+            requiredMilestoneIds.Clear();
+            if (lesson != null)
+            {
+                var lines = lesson.GetUniqueRubricLines();
+                for (int i = 0; i < lines.Count; i++)
+                    requiredMilestoneIds.Add(lines[i].milestoneId);
+            }
+
+            if (requiredMilestoneIds.Count == 0 && experience != null && experience.milestoneIds != null)
+            {
+                for (int i = 0; i < experience.milestoneIds.Length; i++)
+                    if (!string.IsNullOrWhiteSpace(experience.milestoneIds[i]))
+                        requiredMilestoneIds.Add(experience.milestoneIds[i]);
+            }
+
+            if (requiredMilestoneIds.Count == 0)
+            {
+                foreach (var line in RestaurantLesson.CreateIntermediateParisRubric())
+                    requiredMilestoneIds.Add(line.milestoneId);
+            }
+        }
+
+        public bool IsMilestoneCompleted(string milestoneId) =>
+            !string.IsNullOrWhiteSpace(milestoneId) && completedMilestones.Contains(milestoneId);
+
         public void Begin()
         {
+            RebuildRequiredMilestones();
             if (voice) voice.ResetConversation();
-            helpWait = 0;
+
             Stage = RestaurantStage.Welcome;
-            Dish = Drink = WaterType = "";
+            OrderedFood = OrderedDrink = OrderedDessert = WaterType = "";
             MenuInspected = false;
-            CompletedObjectives = AssistedObjectives = Attempts = 0;
-            assisted = false;
+            ConfirmationChallengeIssued = false;
+            ConfirmationChallengeResolved = false;
+            OrderServed = false;
+            Attempts = 0;
+            Level1HintCount = 0;
+            LastPlayerTranscript = "";
+            FinalCoachingSummary = "";
+            usedLevel1ThisTurn = false;
+            usedLevel2ThisTurn = false;
+            completedMilestones.Clear();
+            level1HintedMilestones.Clear();
+            level2RescuedMilestones.Clear();
             ready = true;
-            dynamicFoxOptions = null;
+
+            tutor.Reset(lesson);
 
             if (practiceControl) practiceControl.SetActive(false);
-            if (resultsText) resultsText.text = "";
-            Present();
+            if (helpCards) helpCards.SetActive(false);
+            if (companion) companion.ResetToObserving();
+            if (resultsText)
+            {
+                resultsText.text = "";
+                if (resultsText.transform.parent != null && resultsText.transform.parent.name == "Evaluation summary")
+                    resultsText.transform.parent.gameObject.SetActive(false);
+            }
+
+            string openingFrench = lesson != null
+                ? lesson.EffectiveOpeningFrench
+                : "Bonjour ! Bienvenue au Café de Paris. Installez-vous, voici la carte.";
+
+            voice?.SeedWaiterOpening(openingFrench);
+            SetWaiterPrompt(openingFrench, speak: true);
+            SetPlayerTranscriptPlaceholder();
+            RefreshJournalHeader();
+
+            if (voice != null && !voice.IsAiReady)
+            {
+                Feedback("Online Gemini API key required. Place your key in Assets/Resources/GeminiLocalKey.txt and connect to Wi-Fi.");
+            }
+            else
+            {
+                Feedback("Speak naturally in French with Lucas. Pick up the menu anytime, or press Y for on-demand Fox help.");
+            }
         }
 
         public void InspectMenu()
         {
+            if (MenuInspected) return;
             MenuInspected = true;
-            if (voice) voice.NotifyUserActivity();
-            if (Stage == RestaurantStage.ReadMenu)
-                Feedback("Read the dishes, then tell the waiter you are ready.");
+            if (Stage < RestaurantStage.Complete)
+                Feedback("Menu inspected. Speak naturally in French whenever you're ready to chat or order.");
         }
 
-        RestaurantLine Line => lesson.lines[Mathf.Min((int)Stage, lesson.lines.Length - 1)];
-
-        public string Example
+        public RestaurantPromptContext BuildPromptContext()
         {
-            get
+            bool cardsOpen = companion != null ? companion.IsShowingHelp : (helpCards != null && helpCards.activeSelf);
+            return new RestaurantPromptContext
             {
-                if (Stage == RestaurantStage.Confirmation && Challenge)
-                    return "Non, de l'eau " + WaterType + ", s'il vous plaît.";
-                return Line.example;
-            }
+                lesson = lesson,
+                completedMilestones = completedMilestones,
+                menuInspected = MenuInspected,
+                orderedFood = OrderedFood,
+                orderedDrink = OrderedDrink,
+                orderedDessert = OrderedDessert,
+                confirmationChallengeIssued = ConfirmationChallengeIssued,
+                confirmationChallengeResolved = ConfirmationChallengeResolved,
+                orderServed = OrderServed,
+                isPracticeMode = Stage == RestaurantStage.Practice,
+                foxLevel2Visible = cardsOpen,
+                activeFoxOptions = GetCurrentContextualOptions(),
+                autonomousObjectives = AutonomousObjectives,
+                level2AssistedObjectives = AssistedObjectives,
+                totalTurns = Attempts
+            };
         }
 
-        bool Challenge => lesson != null && lesson.challengeWaterConfirmation && Drink == "eau" && Stage == RestaurantStage.Confirmation;
-
-        void Present()
+        public void NotifyPlayerSpeaking()
         {
-            helpWait = 0;
-            if (helpCards) helpCards.SetActive(false);
-            if (companion) companion.ResetToObserving();
-            if (voice) voice.NotifyUserActivity();
+            if (playerTranscriptText != null && Stage != RestaurantStage.Complete)
+                playerTranscriptText.text = "<size=72%><color=#7DD3FC>LISTENING (FR)...</color></size>\n<color=#CBD5E1>...</color>";
+        }
 
-            if (Stage == RestaurantStage.Complete)
+        public void NotifyPlayerThinking()
+        {
+            if (playerTranscriptText != null && Stage != RestaurantStage.Complete)
+                playerTranscriptText.text = "<size=72%><color=#FDE68A>PROCESSING...</color></size>\n<color=#CBD5E1>...</color>";
+        }
+
+        void SetPlayerTranscriptPlaceholder()
+        {
+            if (playerTranscriptText != null)
+                playerTranscriptText.text = "<size=72%><color=#94A3B8>YOU SAID (FR)</color></size>\n<color=#CBD5E1>Speak naturally in French...</color>";
+        }
+
+        void UpdatePlayerTranscriptDisplay(string transcript, bool askedFox)
+        {
+            if (string.IsNullOrWhiteSpace(transcript)) return;
+            LastPlayerTranscript = transcript.Trim();
+            if (playerTranscriptText == null) return;
+
+            string header = askedFox
+                ? "<size=72%><color=#7DD3FC>YOU ASKED FOX</color></size>"
+                : "<size=72%><color=#7DD3FC>YOU SAID (FR)</color></size>";
+            string formatted = askedFox ? $"\"{LastPlayerTranscript}\"" : $"« {LastPlayerTranscript} »";
+            playerTranscriptText.text = $"{header}\n{formatted}";
+        }
+
+        void SetWaiterPrompt(string frenchText, bool speak)
+        {
+            if (string.IsNullOrWhiteSpace(frenchText)) return;
+            CurrentPrompt = frenchText.Trim();
+            if (speechText) speechText.text = CurrentPrompt;
+            PromptChanged?.Invoke(CurrentPrompt);
+            if (speak && voice != null)
+                voice.SpeakAsWaiter(CurrentPrompt);
+        }
+
+        void RefreshJournalHeader()
+        {
+            if (!objectiveText) return;
+
+            if (Stage == RestaurantStage.Practice)
             {
-                SetPrompt("Très bien, votre commande arrive bientôt. Merci !");
-                if (objectiveText) objectiveText.text = "ORDER COMPLETE";
-                if (resultsText)
-                {
-                    resultsText.text = "Conversation completed\n" + CompletedObjectives + "/6 objectives\n" +
-                        AssistedObjectives + " completed with assistance\n\n" + Dish + " + " + (Drink == "eau" ? "eau " + WaterType : Drink);
-                }
-                if (practiceControl)
-                {
-                    practiceControl.SetActive(true);
-                    var practiceLabel = practiceControl.GetComponentInChildren<TMP_Text>();
-                    if (practiceLabel) practiceLabel.text = voice && voice.IsAiReady ? "KEEP PRACTICING" : "PRACTICE AGAIN";
-                }
-                Feedback("You completed the conversation. Keep practicing or use your wrist menu to return.");
-                if (companion) companion.Celebrate();
+                objectiveText.text = "FREE CONVERSATION\nKeep chatting naturally with Lucas in French.";
                 return;
             }
 
-            if (Stage == RestaurantStage.Confirmation)
+            if (Stage == RestaurantStage.Complete)
             {
-                string spokenDrink = Drink == "eau"
-                    ? "une eau " + (Challenge ? (WaterType == "plate" ? "gazeuse" : "plate") : WaterType)
-                    : "un café";
-                SetPrompt("Alors, " + (Dish == "salade" ? "une salade" : "un croque-monsieur") + " et " + spokenDrink + ". C'est bien ça ?");
-            }
-            else
-            {
-                SetPrompt(Line.prompt);
+                objectiveText.text = PassedExam
+                    ? $"EXAM PASSED ({CompletedObjectives}/{TotalObjectives})\nAutonomous: {AutonomousObjectives}/{TotalObjectives}"
+                    : $"RETRY TO PASS ({CompletedObjectives}/{TotalObjectives})\nAutonomous: {AutonomousObjectives}/{TotalObjectives} (need {MinAutonomousToPass})";
+                return;
             }
 
-            if (objectiveText) objectiveText.text = "YOUR GOAL\n" + Line.hint;
-            Feedback("Speak naturally in French. Press Y anytime for Fox help.");
+            objectiveText.text = $"CAFÉ EXAM · {CompletedObjectives}/{TotalObjectives} GOALS\nNatural French conversation (Level 3/5)";
         }
 
-        string lastWaiterLine, translatedLine, translatedText;
-        string WaiterSubtitle => lastWaiterLine == translatedLine && !string.IsNullOrEmpty(translatedText)
-            ? translatedText : RestaurantTutor.Translation(lastWaiterLine);
-
-        void SayAside(string text)
-        {
-            lastWaiterLine = text;
-            if (speechText) speechText.text = text;
-            voice?.Speak(text);
-        }
-
-        void SetPrompt(string text)
-        {
-            lastWaiterLine = CurrentPrompt = text;
-            if (speechText) speechText.text = text;
-            PromptChanged?.Invoke(text);
-            if (voice) voice.Speak(text, Stage < RestaurantStage.Confirmation && lesson != null && text == Line.prompt ? Line.voice : null);
-        }
-
+        /// <summary>
+        /// Entry point for text-submitted utterances (forwards exclusively to Gemini AI).
+        /// </summary>
         public void SubmitTranscript(string transcript)
         {
             if (!ready || Stage == RestaurantStage.Complete) return;
             if (string.IsNullOrWhiteSpace(transcript))
             {
-                Feedback("I could not hear you. Try speaking again.");
+                Feedback("I could not hear clear speech. Please try speaking again.");
                 return;
             }
 
-            if (voice) voice.NotifyUserActivity();
-
-            if (HandleTutorQuestion(transcript)) return;
-
-            if (Stage == RestaurantStage.Practice)
+            if (voice == null || !voice.IsAiReady)
             {
-                if (voice) voice.Practice(transcript);
+                Feedback("Google AI Studio (Gemini) connection is required. Add Assets/Resources/GeminiLocalKey.txt and connect to Wi-Fi.");
                 return;
             }
 
-            string text = Normalize(transcript);
-            if (Has(text, "repeter|repetez|lentement") || text.Contains("moins vite")) { Repeat(); return; }
-            if (text.Contains("ne sais pas") || text.Contains("ne comprends pas")) { ShowHelp(); return; }
+            voice.SubmitTextToGemini(transcript);
+        }
 
-            if (text.Contains("combien") || Has(text, "prix|coute"))
+        /// <summary>
+        /// Applies a structured Gemini turn — either a Fox Tutor English coaching reply or Lucas Moreau's Parisian French turn.
+        /// </summary>
+        public void ApplyGeminiTurn(RestaurantVoiceBridge.GeminiWaiterTurn turn)
+        {
+            if (turn == null || !ready) return;
+
+            bool isFoxTutor = string.Equals(turn.speakerMode, "fox_tutor", StringComparison.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(turn.userTranscript))
+                UpdatePlayerTranscriptDisplay(turn.userTranscript, askedFox: isFoxTutor);
+
+            // 1. Fox Tutor Turn (Player asked a question in English or requested help)
+            if (isFoxTutor)
             {
-                SayAside("La salade coûte dix euros, le croque-monsieur douze euros et le café trois euros.");
+                usedLevel1ThisTurn = true;
+                Level1HintCount++;
+
+                string replyEn = !string.IsNullOrWhiteSpace(turn.foxTutorReplyEnglish)
+                    ? turn.foxTutorReplyEnglish.Trim()
+                    : "Try replying to Lucas in French — press Y if you'd like example phrases.";
+
+                tutor.UpdateFromFoxTutorTurn(replyEn, turn.level1Keywords, turn.level1TipEnglish, turn.nextFoxOptions);
+                string formattedPanel = tutor.FormatTutorAnswerPanel(replyEn);
+
+                if (companion != null)
+                    companion.ShowHintPanel(formattedPanel);
+                else
+                    Feedback(replyEn);
+
+                if (helpCards != null) helpCards.SetActive(false);
+                Feedback("Fox Tutor: " + replyEn);
+                voice?.SpeakAsFox(replyEn, isFrenchModelPhrase: false);
                 return;
             }
-            if (Has(text, "contient|ingredients") || text.Contains("il y a quoi"))
-            {
-                SayAside("Le croque-monsieur contient du jambon et du fromage.");
-                return;
-            }
+
+            // 2. Waiter Turn (Natural French conversation with Lucas Moreau)
             Attempts++;
-            bool accepted = false;
-            RestaurantStage next = Stage + 1;
 
-            switch (Stage)
-            {
-                case RestaurantStage.Welcome:
-                    accepted = Has(text, "bonjour|bonsoir|salut") && Has(text, "merci");
-                    break;
-                case RestaurantStage.ReadMenu:
-                    accepted = MenuInspected && (Has(text, "pret|prete|commander") || text.Contains("mon choix"));
-                    if (!MenuInspected) { Feedback("Pick up or select the menu before ordering."); return; }
-                    break;
-                case RestaurantStage.Recommendation:
-                    accepted = Has(text, "conseillez|recommandez|conseil|recommandation") || text.Contains("plat du jour");
-                    break;
-                case RestaurantStage.Meal:
-                    bool salad = Has(text, "salade"), croque = text.Contains("croque monsieur") || Has(text, "croque");
-                    accepted = salad != croque && !Has(text, "pas|sans|non");
-                    if (accepted) Dish = salad ? "salade" : "croque-monsieur";
-                    break;
-                case RestaurantStage.Drink:
-                    bool water = Has(text, "eau"), coffee = Has(text, "cafe");
-                    accepted = water != coffee && !Has(text, "pas|sans|non");
-                    if (accepted)
-                    {
-                        Drink = water ? "eau" : "café";
-                        if (water && Has(text, "plate|gazeuse"))
-                        {
-                            if (Has(text, "plate") && Has(text, "gazeuse")) { accepted = false; break; }
-                            WaterType = Has(text, "plate") ? "plate" : "gazeuse";
-                            next = RestaurantStage.Confirmation;
-                        }
-                        else if (coffee)
-                        {
-                            next = RestaurantStage.Confirmation;
-                        }
-                    }
-                    break;
-                case RestaurantStage.Water:
-                    accepted = Has(text, "plate") != Has(text, "gazeuse") && !Has(text, "pas|non");
-                    if (accepted) WaterType = Has(text, "plate") ? "plate" : "gazeuse";
-                    break;
-                case RestaurantStage.Confirmation:
-                    accepted = Challenge
-                        ? Has(text, "non") && Has(text, WaterType) && !Has(text, WaterType == "plate" ? "gazeuse" : "plate")
-                        : (Has(text, "oui|exactement") || text.Contains("c est ca")) && !Has(text, "non|pas");
-                    break;
-            }
-
-            if (!accepted)
-            {
-                SayAside("Pardon, pouvez-vous reformuler ?");
-                Feedback(Stage == RestaurantStage.Confirmation && Challenge
-                    ? "Listen carefully: the waiter repeated a different water type. Correct the order."
-                    : "Try again: " + Line.hint + " (Press Y for Fox help).");
-                return;
-            }
-
-            RecordStageAdvance(next);
-            dynamicFoxOptions = null;
-            Stage = next;
-            Present();
-        }
-
-        void RecordStageAdvance(RestaurantStage next)
-        {
-            if (!(Stage == RestaurantStage.Drink && next == RestaurantStage.Water))
-            {
-                CompletedObjectives++;
-                if (assisted) AssistedObjectives++;
-                if (session && experience && lesson != null)
-                    session.RecordMilestone(experience, Line.milestoneId, assisted);
-                assisted = false;
-            }
-        }
-
-        public void ApplyGeminiTurn(RestaurantVoiceBridge.GeminiWaiterTurn turn, bool usedCardSelection)
-        {
-            if (turn == null || !ready || HandleTutorQuestion(turn.userTranscript)) return;
-
-            translatedLine = turn.npcReplyFrench; translatedText = turn.npcReplyEnglish;
-            if (voice) voice.NotifyUserActivity();
-
-            // If Gemini recognized that the user read one of the active Fox options aloud, handle celebration & assistance.
-            if (turn.matchedFoxOptionIndex >= 0 && companion != null && companion.IsShowingHelp)
-            {
-                assisted = true;
-                companion.ResetToObserving();
-                companion.Celebrate();
-            }
-            else if (usedCardSelection)
-            {
-                assisted = true;
-            }
-
-            if (!string.IsNullOrWhiteSpace(turn.detectedDish))
-                Dish = turn.detectedDish == "salade" ? "salade" : "croque-monsieur";
-
-            if (!string.IsNullOrWhiteSpace(turn.detectedDrink))
-                Drink = turn.detectedDrink == "eau" ? "eau" : "café";
-
-            if (!string.IsNullOrWhiteSpace(turn.detectedWaterType))
-                WaterType = turn.detectedWaterType == "gazeuse" ? "gazeuse" : "plate";
-
-            if (turn.nextFoxOptions != null && turn.nextFoxOptions.Length > 0)
-                dynamicFoxOptions = turn.nextFoxOptions;
-
+            // Practice mode after exam completion
             if (Stage == RestaurantStage.Practice)
             {
-                SetPrompt(turn.npcReplyFrench);
+                tutor.UpdateFromWaiterTurn(turn.npcReplyFrench, turn.npcReplyEnglish, turn.level1Keywords, turn.level1TipEnglish, turn.nextFoxOptions);
+                if (companion != null && companion.IsShowingAnyHelp) companion.ResetToObserving();
+                if (helpCards != null) helpCards.SetActive(false);
+                SetWaiterPrompt(turn.npcReplyFrench, speak: true);
                 if (!string.IsNullOrWhiteSpace(turn.feedbackEnglish))
                     Feedback(turn.feedbackEnglish);
                 return;
             }
 
-            if (turn.advanceObjective)
+            // Track open-ended order details
+            if (!string.IsNullOrWhiteSpace(turn.detectedFood))
+                OrderedFood = turn.detectedFood.Trim();
+            if (!string.IsNullOrWhiteSpace(turn.detectedDrink))
             {
-                RestaurantStage next = Stage + 1;
-                if (Stage == RestaurantStage.Drink)
-                {
-                    if (Drink == "café") next = RestaurantStage.Confirmation;
-                    else if (Drink == "eau" && !string.IsNullOrEmpty(WaterType)) next = RestaurantStage.Confirmation;
-                }
+                OrderedDrink = turn.detectedDrink.Trim();
+                string normDrink = Normalize(OrderedDrink);
+                if (normDrink.Contains("gazeuse")) WaterType = "gazeuse";
+                else if (normDrink.Contains("plate")) WaterType = "plate";
+            }
+            if (!string.IsNullOrWhiteSpace(turn.detectedDessert))
+                OrderedDessert = turn.detectedDessert.Trim();
 
-                if (Stage == RestaurantStage.ReadMenu && !MenuInspected)
-                {
-                    Feedback("Pick up or select the menu on the table before ordering.");
-                    SetPrompt(turn.npcReplyFrench);
-                    return;
-                }
+            if (turn.issuedConfirmationChallenge)
+                ConfirmationChallengeIssued = true;
+            if (turn.resolvedConfirmationChallenge)
+                ConfirmationChallengeResolved = true;
+            if (turn.servedOrder)
+                OrderServed = true;
 
-                RecordStageAdvance(next);
-                Stage = next;
+            bool level2UsedThisTurn = usedLevel2ThisTurn || turn.matchedFoxOptionIndex >= 0;
 
-                if (Stage == RestaurantStage.Complete)
+            // Evaluate all newly completed milestones (non-linear & multi-milestone capable)
+            int newlyAwarded = 0;
+            if (turn.newlyCompletedMilestones != null)
+            {
+                for (int i = 0; i < turn.newlyCompletedMilestones.Length; i++)
                 {
-                    Present();
-                    return;
+                    string id = turn.newlyCompletedMilestones[i]?.Trim();
+                    if (string.IsNullOrWhiteSpace(id)) continue;
+                    if (!requiredMilestoneIds.Contains(id) || completedMilestones.Contains(id)) continue;
+
+                    // Enforce physical 3D menu inspection gate for read-menu
+                    var line = lesson != null ? lesson.GetLineByMilestone(id) : null;
+                    bool needsMenu = (line != null && line.requiresMenuInspection) || id == "read-menu";
+                    if (needsMenu && !MenuInspected)
+                        continue;
+
+                    // Enforce dynamic order confirmation challenge gate when active
+                    bool challengeEnabled = lesson == null || lesson.ConfirmationChallengeEnabled;
+                    if (id == "confirm-order" && challengeEnabled && ConfirmationChallengeIssued && !ConfirmationChallengeResolved)
+                        continue;
+
+                    completedMilestones.Add(id);
+                    if (usedLevel1ThisTurn) level1HintedMilestones.Add(id);
+                    if (level2UsedThisTurn) level2RescuedMilestones.Add(id);
+                    newlyAwarded++;
                 }
             }
 
-            if (helpCards) helpCards.SetActive(false);
-            if (companion && companion.IsShowingHelp) companion.ResetToObserving();
+            // Close Fox panels cleanly once the player responds to Lucas
+            if (helpCards != null) helpCards.SetActive(false);
+            if (companion != null && companion.IsShowingAnyHelp)
+                companion.ResetToObserving();
 
-            if (objectiveText && lesson != null)
-                objectiveText.text = "YOUR GOAL\n" + Line.hint;
+            if (newlyAwarded > 0)
+            {
+                usedLevel1ThisTurn = false;
+                usedLevel2ThisTurn = false;
+            }
+
+            // Keep Tutor synced with Lucas's live French line, English translation, Level 1 hints & Level 2 cards
+            tutor.UpdateFromWaiterTurn(
+                turn.npcReplyFrench,
+                turn.npcReplyEnglish,
+                turn.level1Keywords,
+                turn.level1TipEnglish,
+                turn.nextFoxOptions);
+
+            // Sync high-level stage indicator
+            if (CompletedObjectives >= TotalObjectives)
+            {
+                CompleteExam(turn);
+                return;
+            }
+
+            Stage = OrderServed ? RestaurantStage.Confirmation :
+                (!string.IsNullOrEmpty(OrderedFood) && !string.IsNullOrEmpty(OrderedDrink) ? RestaurantStage.Confirmation : RestaurantStage.Meal);
+
+            RefreshJournalHeader();
 
             if (!string.IsNullOrWhiteSpace(turn.feedbackEnglish))
                 Feedback(turn.feedbackEnglish);
+            else if (!MenuInspected && CompletedObjectives > 0)
+                Feedback("Tip: Grab the physical menu on the table to inspect dishes and unlock the menu goal.");
 
-            // Use Lucas's authentic Gemini response as his spoken line & dialogue bubble.
-            SetPrompt(turn.npcReplyFrench);
+            if (newlyAwarded > 0 && companion != null && !companion.IsShowingAnyHelp)
+                companion.Celebrate();
+
+            SetWaiterPrompt(turn.npcReplyFrench, speak: true);
+        }
+
+        void CompleteExam(RestaurantVoiceBridge.GeminiWaiterTurn finalTurn)
+        {
+            Stage = RestaurantStage.Complete;
+            bool passed = PassedExam;
+
+            if (session != null && experience != null)
+            {
+                session.RecordExamResult(
+                    experience,
+                    completedMilestones,
+                    AutonomousObjectives,
+                    AssistedObjectives,
+                    passed);
+            }
+
+            // Preserve Lucas's authentic closing French line rather than overwriting with a hardcoded prompt
+            string closingFrench = !string.IsNullOrWhiteSpace(finalTurn.npcReplyFrench)
+                ? finalTurn.npcReplyFrench.Trim()
+                : "Merci beaucoup pour votre visite au Café de Paris ! Bonne journée et à bientôt !";
+            SetWaiterPrompt(closingFrench, speak: true);
+
+            FinalCoachingSummary = !string.IsNullOrWhiteSpace(finalTurn.finalSummaryEnglish)
+                ? finalTurn.finalSummaryEnglish.Trim()
+                : (passed
+                    ? "Great work navigating Le Café de Paris naturally in French! Keep practicing polite expressions and listening for subtle order details."
+                    : $"You completed the full café conversation, using Level-2 rescue cards on {AssistedObjectives} of {TotalObjectives} goals. Try another run aiming for at least {MinAutonomousToPass} autonomous goals to pass.");
+
+            RefreshJournalHeader();
+
+            if (resultsText != null)
+            {
+                if (resultsText.transform.parent != null && resultsText.transform.parent.name == "Evaluation summary")
+                    resultsText.transform.parent.gameObject.SetActive(true);
+
+                string badge = passed
+                    ? "<color=#86EFAC><b>EXAM PASSED · LEVEL 3/5</b></color>"
+                    : "<color=#FCD34D><b>NOT PASSED YET · TRY AGAIN</b></color>";
+
+                var orderParts = new List<string>();
+                if (!string.IsNullOrWhiteSpace(OrderedFood)) orderParts.Add(OrderedFood);
+                if (!string.IsNullOrWhiteSpace(OrderedDrink)) orderParts.Add(OrderedDrink);
+                if (!string.IsNullOrWhiteSpace(OrderedDessert)) orderParts.Add(OrderedDessert);
+                string orderSummary = orderParts.Count > 0 ? string.Join(" + ", orderParts) : "Café visit";
+
+                resultsText.text =
+                    $"{badge}\n" +
+                    $"Goals: {CompletedObjectives}/{TotalObjectives}  ·  Autonomous: {AutonomousObjectives}/{TotalObjectives} (min {MinAutonomousToPass})\n" +
+                    $"Order: {orderSummary}\n\n" +
+                    $"<size=82%>{FinalCoachingSummary}</size>";
+            }
+
+            if (practiceControl != null)
+            {
+                practiceControl.SetActive(true);
+                var practiceLabel = practiceControl.GetComponentInChildren<TMP_Text>();
+                if (practiceLabel != null)
+                    practiceLabel.text = passed ? "KEEP PRACTICING" : "RETRY EXAM";
+            }
+
+            Feedback(passed
+                ? "Exam passed! Review your AI coaching report, keep practicing with Lucas, or return to the book."
+                : $"Conversation finished, but you need at least {MinAutonomousToPass}/{TotalObjectives} autonomous goals (without Level-2 cards) to pass. Select RETRY EXAM to try again.");
+
+            if (passed && companion != null)
+                companion.Celebrate();
         }
 
         public FoxHelpOption[] GetCurrentContextualOptions()
         {
-            if (dynamicFoxOptions != null && dynamicFoxOptions.Length >= 3)
-                return dynamicFoxOptions;
+            if (tutor.CurrentLevel2Options != null && tutor.CurrentLevel2Options.Length > 0)
+                return tutor.CurrentLevel2Options;
 
-            switch (Stage)
+            return new[]
             {
-                case RestaurantStage.Welcome:
-                    return new[]
-                    {
-                        new FoxHelpOption { french = "Bonjour, merci beaucoup !", englishDescription = "Polite greeting & thank you (recommended)" },
-                        new FoxHelpOption { french = "Bonjour et merci !", englishDescription = "Short warm greeting & thanks" },
-                        new FoxHelpOption { french = "Salut, merci pour le menu !", englishDescription = "Friendly greeting thanking for the menu" }
-                    };
-                case RestaurantStage.ReadMenu:
-                    return new[]
-                    {
-                        new FoxHelpOption { french = "Je suis prêt à commander.", englishDescription = "Tell the waiter you're ready to order (m.)" },
-                        new FoxHelpOption { french = "Je suis prête à commander.", englishDescription = "Tell the waiter you're ready to order (f.)" },
-                        new FoxHelpOption { french = "J'ai fait mon choix, merci.", englishDescription = "Say you have chosen your meal" }
-                    };
-                case RestaurantStage.Recommendation:
-                    return new[]
-                    {
-                        new FoxHelpOption { french = "Qu'est-ce que vous me conseillez ?", englishDescription = "Ask what the waiter advises for you" },
-                        new FoxHelpOption { french = "Qu'est-ce que vous recommandez ?", englishDescription = "Ask what he recommends on the menu" },
-                        new FoxHelpOption { french = "Quel est le plat du jour ?", englishDescription = "Ask what today's special dish is" }
-                    };
-                case RestaurantStage.Meal:
-                    return new[]
-                    {
-                        new FoxHelpOption { french = "Je voudrais un croque-monsieur, s'il vous plaît.", englishDescription = "Order the toasted ham & cheese sandwich (12 €)" },
-                        new FoxHelpOption { french = "Une salade, s'il vous plaît.", englishDescription = "Order the fresh tomato & cheese salad (10 €)" },
-                        new FoxHelpOption { french = "Je vais prendre un croque-monsieur.", englishDescription = "Polite alternative: 'I will take a croque-monsieur'" }
-                    };
-                case RestaurantStage.Drink:
-                    return new[]
-                    {
-                        new FoxHelpOption { french = "De l'eau, s'il vous plaît.", englishDescription = "Order water (waiter will ask still or sparkling)" },
-                        new FoxHelpOption { french = "Un café, s'il vous plaît.", englishDescription = "Order a classic French espresso/coffee (3 €)" },
-                        new FoxHelpOption { french = "De l'eau plate, s'il vous plaît.", englishDescription = "Order still water directly (skips extra question)" }
-                    };
-                case RestaurantStage.Water:
-                    return new[]
-                    {
-                        new FoxHelpOption { french = "Plate, s'il vous plaît.", englishDescription = "Choose still (non-sparkling) water" },
-                        new FoxHelpOption { french = "Gazeuse, s'il vous plaît.", englishDescription = "Choose sparkling (carbonated) water" },
-                        new FoxHelpOption { french = "De l'eau plate, merci.", englishDescription = "Polite full phrase for still water" }
-                    };
-                case RestaurantStage.Confirmation:
-                    if (Challenge)
-                    {
-                        string expected = string.IsNullOrEmpty(WaterType) ? "plate" : WaterType;
-                        string wrong = expected == "plate" ? "gazeuse" : "plate";
-                        return new[]
-                        {
-                            new FoxHelpOption { french = $"Non, de l'eau {expected}, s'il vous plaît.", englishDescription = $"Politely correct the waiter: you asked for {expected} water" },
-                            new FoxHelpOption { french = $"Pardon, je préfère de l'eau {expected}.", englishDescription = $"Gentle correction: 'Excuse me, I prefer {expected} water'" },
-                            new FoxHelpOption { french = $"Pas {wrong}, de l'eau {expected} !", englishDescription = $"Direct clarification: 'Not {wrong}, {expected} water!'" }
-                        };
-                    }
-                    return new[]
-                    {
-                        new FoxHelpOption { french = "Oui, c'est ça. Merci !", englishDescription = "Confirm that your order is right" },
-                        new FoxHelpOption { french = "Oui, exactement, merci.", englishDescription = "Enthusiastic confirmation: 'Yes, exactly'" },
-                        new FoxHelpOption { french = "Pouvez-vous répéter, s'il vous plaît ?", englishDescription = "Ask the waiter to repeat the order slowly" }
-                    };
-                default:
-                    return new[]
-                    {
-                        new FoxHelpOption { french = "Oui, c'est ma première fois à Paris !", englishDescription = "Say it's your first time visiting Paris" },
-                        new FoxHelpOption { french = "J'aime beaucoup ce quartier.", englishDescription = "Say you really like this neighborhood" },
-                        new FoxHelpOption { french = "L'addition, s'il vous plaît.", englishDescription = "Politely ask for the check" }
-                    };
-            }
+                new FoxHelpOption { french = "Bonjour monsieur, merci beaucoup !", englishDescription = "Polite greeting and thank you" },
+                new FoxHelpOption { french = "Qu'est-ce que vous me conseillez ?", englishDescription = "Ask Lucas for a recommendation" },
+                new FoxHelpOption { french = "Pouvez-vous répéter un peu plus lentement, s'il vous plaît ?", englishDescription = "Politely ask Lucas to repeat more slowly" }
+            };
         }
 
-        float helpWait;
-        void Update()
-        {
-            if (!ready || Stage >= RestaurantStage.Complete || (companion && companion.IsShowingHelp) ||
-                (voice && voice.speaker && voice.speaker.isPlaying)) return;
-            helpWait += Time.unscaledDeltaTime;
-            if (helpWait >= (voice ? voice.HelpDelay : 8f)) OnProlongedUserPause();
-        }
-
-        bool HandleTutorQuestion(string words)
-        {
-            if (string.IsNullOrWhiteSpace(words) || !RestaurantTutor.IsEnglishQuestion(words) &&
-                !System.Text.RegularExpressions.Regex.IsMatch(Normalize(words), @"(veut dire|signifie|aidez|comment dit|besoin d aide|comprends pas)")) return false;
-            ShowHelp();
-            var meaning = RestaurantTutor.Definition(words);
-            TutorCaption("Waiter: " + WaiterSubtitle +
-                (meaning == null ? "\nTap a phrase to hear it." : "\n" + meaning));
-            return true;
-        }
-
-        void TutorCaption(string message)
-        {
-            Feedback(message);
-            if (companion) companion.SetHelpCaption(message);
-        }
-
-        public void OnProlongedUserPause()
-        {
-            if (!ready || Stage >= RestaurantStage.Complete)
-                return;
-
-            helpWait = 0;
-            if (companion != null && !companion.IsShowingHelp)
-                ShowHelp();
-        }
-
+        /// <summary>
+        /// On-demand progressive Fox help cycle (triggered by Left Controller Y button or Wrist Menu):
+        /// Observing -> Level 1 (English translation + key French words, non-penalizing)
+        /// -> Level 2 (3 dynamic Gemini French/English phrase cards)
+        /// -> Observing (close help).
+        /// </summary>
         public void ToggleFoxHelp()
         {
-            helpWait = 0;
-            if (companion != null && companion.IsShowingHelp)
+            if (!ready || Stage == RestaurantStage.Complete)
+                return;
+
+            if (companion == null)
             {
-                companion.ResetToObserving();
-                if (helpCards) helpCards.SetActive(false);
-                if (voice) voice.NotifyUserActivity();
+                if (helpCards != null && helpCards.activeSelf)
+                    helpCards.SetActive(false);
+                else
+                    ShowFoxLevel2Cards();
                 return;
             }
-            ShowHelp();
+
+            if (companion.IsShowingLevel1)
+            {
+                ShowFoxLevel2Cards();
+            }
+            else if (companion.IsShowingHelp)
+            {
+                HideFoxHelp();
+            }
+            else
+            {
+                ShowFoxLevel1Hint();
+            }
         }
 
-        public void ShowHelp()
+        public void ShowFoxLevel1Hint()
         {
-            if (Stage >= RestaurantStage.Complete) return;
-            assisted = true;
+            if (!ready || Stage == RestaurantStage.Complete) return;
+            usedLevel1ThisTurn = true;
+            Level1HintCount++;
+
+            string panelText = tutor.FormatLevel1Panel();
+            if (companion != null)
+                companion.ShowHintPanel(panelText);
+
+            if (helpCards != null) helpCards.SetActive(false);
+            Feedback($"Fox Level 1 Hint · Lucas said: \"{tutor.LastWaiterEnglish}\" (Press Y again for 3 example phrases)");
+        }
+
+        public void ShowFoxLevel2Cards()
+        {
+            if (!ready || Stage == RestaurantStage.Complete) return;
+            usedLevel2ThisTurn = true;
 
             FoxHelpOption[] options = GetCurrentContextualOptions();
-
             if (companion != null)
             {
-                companion.ShowRescueOptions(options, idx => SelectFoxOptionByIndex(idx, spokenAloud: false));
+                companion.ShowRescueOptions(options, idx => SelectFoxOptionByIndex(idx));
+                companion.SetHelpCaption(tutor.FormatLevel2Header());
             }
             else if (helpCards != null)
             {
@@ -490,53 +568,81 @@ namespace Alterlife.Immersive
             if (answerB && options.Length > 1) answerB.text = FormatOption(options[1]);
             if (answerC && options.Length > 2) answerC.text = FormatOption(options[2]);
 
-            TutorCaption("Waiter: " + WaiterSubtitle + "\nTap a phrase to hear it. Then try it yourself.");
+            Feedback("Fox Level 2 · Tap any card to hear pronunciation, then say your own French reply aloud.");
         }
+
+        public void HideFoxHelp()
+        {
+            if (companion != null) companion.ResetToObserving();
+            if (helpCards != null) helpCards.SetActive(false);
+        }
+
+        // Backwards-compatible entry point (opens Level 1 hint first when invoked externally)
+        public void ShowHelp() => ShowFoxLevel1Hint();
 
         static string FormatOption(FoxHelpOption opt) =>
             $"<b><color=#F8FAFC>{opt.french}</color></b>\n<size=68%><color=#94A3B8>{opt.englishDescription}</color></size>";
 
-        void SelectFoxOptionByIndex(int idx, bool spokenAloud)
+        void SelectFoxOptionByIndex(int idx)
         {
             var options = GetCurrentContextualOptions();
             if (idx < 0 || idx >= options.Length) return;
-            assisted = true;
+
+            usedLevel2ThisTurn = true;
             string phrase = options[idx].french;
-            voice?.Speak(phrase);
-            TutorCaption("Try saying: " + phrase + "\n" + options[idx].englishDescription);
+            voice?.SpeakAsFox(phrase, isFrenchModelPhrase: true);
+
+            string caption = $"Listen & repeat aloud: \"{phrase}\"\n<size=78%><color=#CBD5E1>{options[idx].englishDescription}</color></size>";
+            if (companion != null) companion.SetHelpCaption(caption);
+            Feedback($"Fox pronunciation: \"{phrase}\" — now say it (or your own variation) aloud to Lucas.");
         }
 
-        public void UseAnswerA() => SelectFoxOptionByIndex(0, false);
-        public void UseAnswerB() => SelectFoxOptionByIndex(1, false);
-        public void UseAnswerC() => SelectFoxOptionByIndex(2, false);
+        public void UseAnswerA() => SelectFoxOptionByIndex(0);
+        public void UseAnswerB() => SelectFoxOptionByIndex(1);
+        public void UseAnswerC() => SelectFoxOptionByIndex(2);
 
         public void Repeat()
         {
-            if (Stage >= RestaurantStage.Complete) return;
-            assisted = true;
-            SetPrompt(CurrentPrompt);
-            Feedback("Listen again. Asking for clarification is useful communication.");
+            if (Stage >= RestaurantStage.Complete || string.IsNullOrWhiteSpace(CurrentPrompt)) return;
+            voice?.SpeakAsWaiter(CurrentPrompt);
+            Feedback("Listening to Lucas again...");
         }
 
         public void BeginPractice()
         {
             if (Stage != RestaurantStage.Complete) return;
-            if (!voice || !voice.IsAiReady)
+
+            if (!PassedExam)
             {
                 Begin();
-                Feedback("Guided practice restarted. Press Y for Fox help cards.");
                 return;
             }
 
             Stage = RestaurantStage.Practice;
-            if (objectiveText) objectiveText.text = "FREE CONVERSATION\nTalk about your visit to Paris. Your evaluation is already complete.";
-            SetPrompt("Vous visitez Paris pour la première fois ?");
+            if (practiceControl) practiceControl.SetActive(false);
+            RefreshJournalHeader();
+
+            string opener = "Vous visitez Paris pour la première fois ? Qu'est-ce qui vous plaît le plus ici ?";
+            tutor.UpdateFromWaiterTurn(
+                opener,
+                "Is this your first time visiting Paris? What do you like most here?",
+                new[] { "Première fois — First time", "J'adore — I love", "La nourriture — The food" },
+                "Chat freely with Lucas about your trip to Paris!",
+                new[]
+                {
+                    new FoxHelpOption { french = "Oui, c'est ma première fois à Paris et j'adore l'architecture !", englishDescription = "Say it's your first visit and you love the architecture" },
+                    new FoxHelpOption { french = "Je suis déjà venu, j'aime beaucoup les cafés parisiens.", englishDescription = "Say you've visited before and love Parisian cafés" },
+                    new FoxHelpOption { french = "J'adore la cuisine française et cette vue sur la tour Eiffel !", englishDescription = "Praise French food and the view of the Eiffel Tower" }
+                });
+
+            SetWaiterPrompt(opener, speak: true);
+            Feedback("Free conversation mode! Chat naturally with Lucas in French.");
         }
 
         public void ReceivePracticeReply(string reply)
         {
             if (Stage == RestaurantStage.Practice)
-                SetPrompt(reply);
+                SetWaiterPrompt(reply, speak: true);
         }
 
         public void Feedback(string message)
@@ -548,6 +654,7 @@ namespace Alterlife.Immersive
 
         public static string Normalize(string input)
         {
+            if (string.IsNullOrEmpty(input)) return "";
             var result = new StringBuilder();
             foreach (char c in input.ToLowerInvariant().Normalize(NormalizationForm.FormD))
             {
@@ -556,7 +663,5 @@ namespace Alterlife.Immersive
             }
             return Regex.Replace(result.ToString(), @"\s+", " ").Trim();
         }
-
-        static bool Has(string value, string alternatives) => Regex.IsMatch(value, @"\b(?:" + alternatives + @")\b");
     }
 }

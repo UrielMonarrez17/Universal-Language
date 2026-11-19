@@ -12,51 +12,61 @@ using UnityEngine.Networking;
 namespace Alterlife.Immersive
 {
     /// <summary>
-    /// Quest 2 continuous Microphone (VAD) + Google AI Studio (Gemini) multimodal dialogue & TTS adapter.
-    /// Supports both direct Gemini API integration (key loaded from ignored local Resources/GeminiLocalKey)
-    /// and the optional local loopback serverUrl.
+    /// Online Google AI Studio (Gemini) multimodal voice & dual-speaker spatial TTS bridge for Le Café de Paris.
+    /// Captures natural speech via continuous Quest/PC microphone VAD, sends audio + full non-linear rubric state
+    /// to Gemini with strict structured JSON schema output, and synthesizes independent spatial voices for
+    /// Lucas Moreau (waiter, French) and the Fox Tutor (assistant, English + French pronunciation modeling).
     /// </summary>
     public sealed class RestaurantVoiceBridge : MonoBehaviour
     {
-        [Tooltip("Optional custom loopback backend base URL (e.g. http://127.0.0.1:8787).")]
-        public string serviceUrl;
-
         [Header("Google AI Studio (Gemini)")]
         [Tooltip("Optional Inspector override; if blank, loads from Resources/GeminiLocalKey (git-ignored).")]
         [SerializeField] private string geminiApiKeyOverride;
-        [SerializeField] private string geminiChatModel = "gemini-2.5-flash";
-        [SerializeField] private string geminiTtsModel = "gemini-2.5-flash-preview-tts";
+        [SerializeField] private string geminiChatModel = "gemini-3.5-flash-lite";
+        [SerializeField] private string geminiTtsModel = "gemini-3.8-flash-lite-tts";
+
+        static readonly string[] ChatFallbackModels = { "gemini-3.6-flash", "gemini-3.8-flash" };
+        static readonly string[] TtsFallbackModels = { "gemini-3.8-flash-tts", "gemini-2.5-flash-preview-tts" };
 
         [Header("Continuous Voice Activity Detection (VAD)")]
         public bool autoListenVad = true;
-        [SerializeField] private float vadStartRms = 0.016f;
-        [SerializeField] private float vadStopRms = 0.010f;
+        [SerializeField] private float vadStartRms = 0.015f;
+        [SerializeField] private float vadStopRms = 0.009f;
         [SerializeField] private float minSpeechDuration = 0.14f;
-        [SerializeField] private float endSilenceDuration = 1.15f;
-        [SerializeField] private float maxUtteranceSeconds = 9.5f;
-        [SerializeField] private float prolongedPauseSeconds = 8.0f;
+        [SerializeField] private float endSilenceDuration = 1.35f;
+        [SerializeField] private float maxUtteranceSeconds = 14.0f;
 
         [Header("Scene References")]
         public RestaurantEvaluation evaluation;
         public CommunicativeEncounter encounter;
         public NPCPersonality npcPersonality;
         public AudioSource speaker;
+        public AudioSource foxSpeaker;
         public TMP_Text microphoneLabel;
 
-        public bool IsConfigured => Uri.TryCreate(serviceUrl, UriKind.Absolute, out var uri) &&
-            (uri.Scheme == "https" || (uri.IsLoopback && uri.Scheme == "http"));
+        // Legacy serialized field kept empty/unused for serialization stability with existing scene YAML
+        [HideInInspector] public string serviceUrl;
 
+        /// <summary>Disables live Gemini HTTP calls during automated Editor tests.</summary>
         public static bool DisableGeminiForTests;
+
+        /// <summary>Optional deterministic handler used exclusively by automated Play Mode tests.</summary>
+        public static Func<string, GeminiWaiterTurn> TestTurnHandler;
+
         public bool HasGeminiKey => !DisableGeminiForTests && !string.IsNullOrWhiteSpace(ResolveGeminiKey());
-        public bool IsAiReady => HasGeminiKey || IsConfigured;
+        public bool IsConfigured => HasGeminiKey;
+        public bool IsAiReady => HasGeminiKey || TestTurnHandler != null;
         public bool IsRecording { get; private set; }
         public bool IsBusy { get; private set; }
+        public bool IsAnyActorSpeaking =>
+            isSynthesizingSpeech ||
+            (speaker != null && speaker.isPlaying) ||
+            (foxSpeaker != null && foxSpeaker.isPlaying);
         public string LastTranscript { get; private set; }
-        public float HelpDelay => prolongedPauseSeconds;
-        public float SilenceDuration { get; private set; }
 
         const int SampleRate = 16000;
-        const int RingBufferSeconds = 16;
+        const int RingBufferSeconds = 20;
+        const int MaxCachedTtsClips = 48;
 
         AudioClip micRingClip;
         string device;
@@ -66,26 +76,27 @@ namespace Alterlife.Immersive
         float speechStartAccum;
         float silenceEndAccum;
         float utteranceLengthSeconds;
-        bool silenceHelpTriggered;
-        FrenchSpeechRecognizer localRecognizer, englishRecognizer;
         float nextMicAttempt;
-        bool CanCapture => IsAiReady || FrenchSpeechRecognizer.Supported;
-        bool Continuous => autoListenVad && CanCapture;
         bool micPermissionDenied;
         bool micBootstrapped;
-        bool wasSpeakerPlaying;
+        bool wasAnyActorSpeaking;
+        bool isSynthesizingSpeech;
         string cachedResourceKey;
 
         Coroutine speechRoutine;
-        UnityWebRequest speechRequest, operationRequest;
-        readonly List<Turn> history = new List<Turn>();
-        readonly float[] sampleScratch = new float[SampleRate * 2];
+        UnityWebRequest speechRequest;
+        UnityWebRequest operationRequest;
 
-        [Serializable] class Transcript { public string text; }
-        [Serializable] class SpokenLine { public string text; public string language = "fr-FR"; }
-        [Serializable] class Turn { public string role; public string content; }
-        [Serializable] class ChatRequest { public string language = "fr-FR"; public string scenario = "paris-restaurant"; public string dish; public string drink; public Turn[] history; }
-        [Serializable] class ChatReply { public string reply; }
+        readonly List<HistoryEntry> history = new List<HistoryEntry>();
+        readonly float[] sampleScratch = new float[SampleRate * 2];
+        readonly Dictionary<string, AudioClip> ttsCache = new Dictionary<string, AudioClip>();
+        readonly Queue<string> ttsCacheOrder = new Queue<string>();
+
+        struct HistoryEntry
+        {
+            public string speaker;
+            public string content;
+        }
 
         // Gemini REST JSON DTOs
         [Serializable] class GeminiResponse { public GeminiCandidate[] candidates; }
@@ -97,16 +108,68 @@ namespace Alterlife.Immersive
         [Serializable]
         public sealed class GeminiWaiterTurn
         {
+            public string speakerMode = "waiter"; // "waiter" | "fox_tutor"
             public string userTranscript;
-            public string npcReplyFrench, npcReplyEnglish;
+            public string npcReplyFrench;
+            public string npcReplyEnglish;
+            public string foxTutorReplyEnglish;
             public string feedbackEnglish;
-            public bool advanceObjective;
-            public string detectedDish;
+            public string[] newlyCompletedMilestones;
+            public string detectedFood;
             public string detectedDrink;
-            public string detectedWaterType;
+            public string detectedDessert;
+            public bool issuedConfirmationChallenge;
+            public bool resolvedConfirmationChallenge;
+            public bool servedOrder;
             public int matchedFoxOptionIndex = -1;
+            public string[] level1Keywords;
+            public string level1TipEnglish;
             public FoxHelpOption[] nextFoxOptions;
+            public string finalSummaryEnglish;
         }
+
+        static readonly string TurnResponseSchemaJson =
+            "{" +
+            "\"type\":\"OBJECT\"," +
+            "\"properties\":{" +
+                "\"speakerMode\":{\"type\":\"STRING\",\"enum\":[\"waiter\",\"fox_tutor\"]}," +
+                "\"userTranscript\":{\"type\":\"STRING\"}," +
+                "\"npcReplyFrench\":{\"type\":\"STRING\"}," +
+                "\"npcReplyEnglish\":{\"type\":\"STRING\"}," +
+                "\"foxTutorReplyEnglish\":{\"type\":\"STRING\"}," +
+                "\"feedbackEnglish\":{\"type\":\"STRING\"}," +
+                "\"newlyCompletedMilestones\":{\"type\":\"ARRAY\",\"items\":{\"type\":\"STRING\",\"enum\":[\"greet-waiter\",\"read-menu\",\"ask-about-menu\",\"place-order\",\"order-drink\",\"confirm-order\",\"table-chat\",\"ask-bill-farewell\"]}}," +
+                "\"detectedFood\":{\"type\":\"STRING\"}," +
+                "\"detectedDrink\":{\"type\":\"STRING\"}," +
+                "\"detectedDessert\":{\"type\":\"STRING\"}," +
+                "\"issuedConfirmationChallenge\":{\"type\":\"BOOLEAN\"}," +
+                "\"resolvedConfirmationChallenge\":{\"type\":\"BOOLEAN\"}," +
+                "\"servedOrder\":{\"type\":\"BOOLEAN\"}," +
+                "\"matchedFoxOptionIndex\":{\"type\":\"INTEGER\"}," +
+                "\"level1Keywords\":{\"type\":\"ARRAY\",\"items\":{\"type\":\"STRING\"}}," +
+                "\"level1TipEnglish\":{\"type\":\"STRING\"}," +
+                "\"nextFoxOptions\":{" +
+                    "\"type\":\"ARRAY\"," +
+                    "\"items\":{" +
+                        "\"type\":\"OBJECT\"," +
+                        "\"properties\":{" +
+                            "\"french\":{\"type\":\"STRING\"}," +
+                            "\"englishDescription\":{\"type\":\"STRING\"}" +
+                        "}," +
+                        "\"required\":[\"french\",\"englishDescription\"]" +
+                    "}" +
+                "}," +
+                "\"finalSummaryEnglish\":{\"type\":\"STRING\"}" +
+            "}," +
+            "\"required\":[" +
+                "\"speakerMode\",\"userTranscript\",\"npcReplyFrench\",\"npcReplyEnglish\"," +
+                "\"foxTutorReplyEnglish\",\"feedbackEnglish\",\"newlyCompletedMilestones\"," +
+                "\"detectedFood\",\"detectedDrink\",\"detectedDessert\"," +
+                "\"issuedConfirmationChallenge\",\"resolvedConfirmationChallenge\",\"servedOrder\"," +
+                "\"matchedFoxOptionIndex\",\"level1Keywords\",\"level1TipEnglish\"," +
+                "\"nextFoxOptions\",\"finalSummaryEnglish\"" +
+            "]" +
+            "}";
 
         string ResolveGeminiKey()
         {
@@ -125,14 +188,31 @@ namespace Alterlife.Immersive
         {
             if (npcPersonality == null)
                 npcPersonality = FindAnyObjectByType<NPCPersonality>();
+            ResolveFoxSpeaker();
+        }
 
-            // RestaurantEvaluation.Begin owns capture startup and the initial prompt.
+        void ResolveFoxSpeaker()
+        {
+            if (foxSpeaker == null && evaluation != null && evaluation.companion != null)
+                foxSpeaker = evaluation.companion.AudioSource;
+        }
+
+        public void SeedWaiterOpening(string openingFrench)
+        {
+            if (!string.IsNullOrWhiteSpace(openingFrench))
+                RecordHistory("Lucas (waiter)", openingFrench);
         }
 
         IEnumerator EnsureMicrophoneRingRunning()
         {
             if (micBootstrapped || micPermissionDenied || Application.isBatchMode)
                 yield break;
+
+            if (!HasGeminiKey)
+            {
+                SetLabel("NO GEMINI API KEY");
+                yield break;
+            }
 
             micBootstrapped = true;
             SetLabel("STARTING MICROPHONE");
@@ -146,19 +226,15 @@ namespace Alterlife.Immersive
                 callbacks.PermissionDenied += _ => answered = true;
                 SetLabel("ALLOW MICROPHONE IN QUEST");
                 UnityEngine.Android.Permission.RequestUserPermission(UnityEngine.Android.Permission.Microphone, callbacks);
-                while (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone) &&
-                       !answered)
-                {
+                while (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone) && !answered)
                     yield return null;
-                }
 
                 if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone))
                 {
                     micPermissionDenied = true;
                     micBootstrapped = false;
-                    SetLabel("MIC DENIED · PRESS Y");
-                    if (evaluation != null)
-                        evaluation.Feedback("Microphone permission needed for voice. Press Y for Fox options.");
+                    SetLabel("MIC DENIED");
+                    evaluation?.Feedback("Microphone permission is required for live French conversation.");
                     yield break;
                 }
             }
@@ -166,27 +242,11 @@ namespace Alterlife.Immersive
             yield return null;
 #endif
 
-            if (!IsAiReady && FrenchSpeechRecognizer.Supported && localRecognizer?.Ready != true)
-            {
-                SetLabel("LOADING FRENCH VOICE");
-                localRecognizer?.Dispose();
-                localRecognizer = new FrenchSpeechRecognizer();
-                yield return localRecognizer.Prepare();
-                englishRecognizer?.Dispose();
-                englishRecognizer = new FrenchSpeechRecognizer("vosk-model-small-en-us-0.15");
-                yield return englishRecognizer.Prepare();
-                if (!localRecognizer.Ready)
-                {
-                    SetLabel("VOICE UNAVAILABLE · PRESS Y");
-                    micBootstrapped = false;
-                    nextMicAttempt = Time.realtimeSinceStartup + 10f;
-                    yield break;
-                }
-            }
             if (Microphone.devices.Length == 0)
             {
-                micBootstrapped = false; nextMicAttempt = Time.realtimeSinceStartup + 3f;
-                SetLabel("NO MIC · PRESS Y");
+                micBootstrapped = false;
+                nextMicAttempt = Time.realtimeSinceStartup + 3f;
+                SetLabel("NO MICROPHONE");
                 yield break;
             }
 
@@ -194,43 +254,43 @@ namespace Alterlife.Immersive
             micRingClip = Microphone.Start(device, true, RingBufferSeconds, SampleRate);
             if (micRingClip == null)
             {
-                micBootstrapped = false; nextMicAttempt = Time.realtimeSinceStartup + 3f;
+                micBootstrapped = false;
+                nextMicAttempt = Time.realtimeSinceStartup + 3f;
                 SetLabel("MIC UNAVAILABLE");
                 yield break;
             }
 
-            Debug.Log("[ParisVoice] Microphone capture started at " + micRingClip.frequency + " Hz.");
+            Debug.Log("[ParisVoice] Continuous Gemini VAD started at " + micRingClip.frequency + " Hz.");
             lastReadSamplePos = 0;
             IsRecording = true;
+            SetLabel("● LISTENING (FR)");
         }
 
         void Update()
         {
-            if (Application.isBatchMode)
+            if (Application.isBatchMode || evaluation == null)
                 return;
 
-            // Manual non-VAD loopback recording cap
-            if (!autoListenVad && !HasGeminiKey && IsRecording && Time.realtimeSinceStartup - started > 11.5f)
+            if (!HasGeminiKey)
             {
-                FinishRecording();
+                SetLabel("NO GEMINI API KEY");
                 return;
             }
 
-            if (!Continuous || evaluation == null)
+            if (!autoListenVad)
                 return;
 
-            bool waiterTalking = speaker != null && speaker.isPlaying;
-            if (wasSpeakerPlaying && !waiterTalking)
-            {
-                // Reset silence window cleanly as soon as the waiter finishes his turn.
-                ResetVadCapture(resetProlongedPause: true);
-            }
-            wasSpeakerPlaying = waiterTalking;
+            bool anyTalking = IsAnyActorSpeaking;
+            if (wasAnyActorSpeaking && !anyTalking)
+                ResetVadCapture();
+            wasAnyActorSpeaking = anyTalking;
 
-            if (IsBusy || waiterTalking || evaluation.Stage == RestaurantStage.Complete)
+            if (IsBusy || anyTalking || evaluation.Stage == RestaurantStage.Complete)
             {
                 if (IsBusy) SetLabel("● THINKING...");
-                else if (waiterTalking) SetLabel("● WAITER SPEAKING");
+                else if (foxSpeaker != null && foxSpeaker.isPlaying) SetLabel("● FOX SPEAKING");
+                else if (speaker != null && speaker.isPlaying) SetLabel("● LUCAS SPEAKING");
+                else if (isSynthesizingSpeech) SetLabel("● PREPARING VOICE");
                 return;
             }
 
@@ -241,7 +301,7 @@ namespace Alterlife.Immersive
                     IsRecording = micBootstrapped = false;
                     if (micRingClip) Destroy(micRingClip);
                     micRingClip = null;
-                    ResetVadCapture(true);
+                    ResetVadCapture();
                 }
 #if UNITY_ANDROID && !UNITY_EDITOR
                 if (micPermissionDenied && UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone))
@@ -251,10 +311,9 @@ namespace Alterlife.Immersive
                     StartCoroutine(EnsureMicrophoneRingRunning());
                 return;
             }
+
             UpdateContinuousVad();
         }
-
-        float started;
 
         void UpdateContinuousVad()
         {
@@ -291,12 +350,12 @@ namespace Alterlife.Immersive
                     if (speechStartAccum >= minSpeechDuration)
                     {
                         isCapturingUtterance = true;
-                        int preRollSamples = Mathf.RoundToInt(0.40f * SampleRate);
+                        int preRollSamples = Mathf.RoundToInt(0.45f * SampleRate);
                         utteranceStartSample = (currentPos - readCount - preRollSamples + totalSamples) % totalSamples;
                         utteranceLengthSeconds = speechStartAccum;
                         silenceEndAccum = 0f;
-                        SilenceDuration = 0f;
                         SetLabel("● SPEAKING...");
+                        evaluation?.NotifyPlayerSpeaking();
                     }
                 }
                 else
@@ -324,56 +383,24 @@ namespace Alterlife.Immersive
                     ReadRingSlice(utteranceStartSample, captureLen, pcm);
                     byte[] wav = EncodeWav(pcm, micRingClip.channels, micRingClip.frequency);
 
-                    ResetVadCapture(resetProlongedPause: true);
-                    StartCoroutine(ProcessUtterance(wav));
+                    ResetVadCapture();
+                    evaluation?.NotifyPlayerThinking();
+                    StartCoroutine(SendPayloadToGemini(wav, null));
                 }
             }
-        }
-
-        IEnumerator ProcessUtterance(byte[] wav)
-        {
-            if (HasGeminiKey) yield return SendAudioToGemini(wav);
-            else if (IsConfigured) yield return TranscribeLegacy(wav);
-            else if (localRecognizer?.Ready == true)
-            {
-                IsBusy = true;
-                SetLabel("CHECKING YOUR ANSWER");
-                // EncodeWav produces a 44-byte PCM header. Vosk expects raw PCM16.
-                var pcm = new byte[wav.Length - 44];
-                Buffer.BlockCopy(wav, 44, pcm, 0, pcm.Length);
-                var work = localRecognizer.Decode(pcm, SampleRate);
-                var english = englishRecognizer?.Ready == true ? englishRecognizer.Decode(pcm, SampleRate) : null;
-                while (!work.IsCompleted || (english != null && !english.IsCompleted)) yield return null;
-                IsBusy = false;
-                LastTranscript = work.IsFaulted ? "" : work.Result;
-                if (english != null && !english.IsFaulted && RestaurantTutor.IsEnglishQuestion(english.Result))
-                {
-                    string fr = LastTranscript;
-                    LastTranscript = english.Result;
-                    if (RestaurantTutor.Definition(LastTranscript) == null && RestaurantTutor.Definition(LastTranscript + " " + fr) != null)
-                        LastTranscript += " " + fr;
-                }
-                evaluation?.SubmitTranscript(LastTranscript);
-            }
-            ResetVadCapture(true);
         }
 
         void ReadRingSlice(int startSample, int count, float[] dest)
         {
-            // Unity wraps GetData at the end of the clip. Reuse the RMS buffer each frame.
             micRingClip.GetData(dest.AsSpan(0, count), startSample);
         }
-        void ResetVadCapture(bool resetProlongedPause)
+
+        void ResetVadCapture()
         {
             isCapturingUtterance = false;
             speechStartAccum = 0f;
             silenceEndAccum = 0f;
             utteranceLengthSeconds = 0f;
-            if (resetProlongedPause)
-            {
-                SilenceDuration = 0f;
-                silenceHelpTriggered = false;
-            }
             if (micRingClip != null && !string.IsNullOrEmpty(device))
             {
                 int pos = Microphone.GetPosition(device);
@@ -381,128 +408,79 @@ namespace Alterlife.Immersive
             }
         }
 
-        public void NotifyUserActivity()
-        {
-            SilenceDuration = 0f;
-            silenceHelpTriggered = false;
-        }
+        public void NotifyUserActivity() { }
 
         public void ToggleRecording()
         {
             if (IsBusy) return;
-
-            if (Continuous)
+            if (!HasGeminiKey)
             {
-                if (!micBootstrapped)
-                    StartCoroutine(EnsureMicrophoneRingRunning());
-                NotifyUserActivity();
+                SetLabel("NO GEMINI API KEY");
+                evaluation?.Feedback("Google AI Studio (Gemini) API key is required. Add Assets/Resources/GeminiLocalKey.txt.");
                 return;
             }
-
-            if (!IsConfigured)
-            {
-                if (evaluation != null)
-                    evaluation.Feedback("Voice is unavailable offline. Press Y for Fox help cards.");
-                return;
-            }
-
-            if (IsRecording) FinishRecording();
-            else if (speaker && speaker.isPlaying) evaluation?.Feedback("Let the waiter finish, then speak.");
-            else StartCoroutine(StartLegacyRecording());
-        }
-
-        IEnumerator StartLegacyRecording()
-        {
-            IsBusy = true;
-#if UNITY_ANDROID && !UNITY_EDITOR
-            if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone))
-            {
-                UnityEngine.Android.Permission.RequestUserPermission(UnityEngine.Android.Permission.Microphone);
-                float deadline = Time.realtimeSinceStartup + 15;
-                while (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone) && Time.realtimeSinceStartup < deadline) yield return null;
-                if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone))
-                { Fail("Microphone permission is needed to speak. Press Y for response cards."); yield break; }
-            }
-#else
-            yield return null;
-#endif
-            if (Microphone.devices.Length == 0) { Fail("No microphone is available. Press Y for Fox help cards."); yield break; }
-            device = Microphone.devices[0];
-            micRingClip = Microphone.Start(device, false, 12, SampleRate);
-            if (!micRingClip) { Fail("The microphone could not start. Please try again."); yield break; }
-            started = Time.realtimeSinceStartup; IsRecording = true; IsBusy = false;
-            SetLabel("FINISH SPEAKING"); evaluation?.Feedback("Listening in French...");
-        }
-
-        public void FinishRecording()
-        {
-            if (!IsRecording || HasGeminiKey) return;
-            int samples = Microphone.GetPosition(device);
-            Microphone.End(device); IsRecording = false;
-            if (samples < 1600) { Destroy(micRingClip); Fail("I could not hear enough speech. Please try again."); return; }
-            var pcm = new float[samples * micRingClip.channels]; micRingClip.GetData(pcm, 0);
-            var wav = EncodeWav(pcm, micRingClip.channels, micRingClip.frequency);
-            Destroy(micRingClip); micRingClip = null;
-            StartCoroutine(TranscribeLegacy(wav));
-        }
-
-        IEnumerator TranscribeLegacy(byte[] wav)
-        {
-            IsBusy = true; SetLabel("● THINKING...");
-            using (var request = new UnityWebRequest(serviceUrl.TrimEnd('/') + "/transcribe", "POST"))
-            {
-                operationRequest = request;
-                request.uploadHandler = new UploadHandlerRaw(wav);
-                request.downloadHandler = new DownloadHandlerBuffer();
-                request.SetRequestHeader("Content-Type", "audio/wav"); request.SetRequestHeader("X-Language", "fr-FR"); request.timeout = 25;
-                yield return request.SendWebRequest(); operationRequest = null;
-                if (request.result != UnityWebRequest.Result.Success) { Fail("I could not hear your answer. Try again or press Y."); yield break; }
-                string text = null;
-                try { text = JsonUtility.FromJson<Transcript>(request.downloadHandler.text)?.text; } catch (ArgumentException) { }
-                IsBusy = false; SetLabel("START SPEAKING");
-                LastTranscript = text;
-                if (string.IsNullOrWhiteSpace(text)) { evaluation?.Feedback("No clear speech was detected. Please try again."); yield break; }
-                encounter?.OnVoiceTranscriptionReceived(text);
-            }
+            if (!micBootstrapped)
+                StartCoroutine(EnsureMicrophoneRingRunning());
         }
 
         public void SubmitTextToGemini(string userPhrase)
         {
-            if (!HasGeminiKey || string.IsNullOrWhiteSpace(userPhrase) || IsBusy || Application.isBatchMode)
+            if (string.IsNullOrWhiteSpace(userPhrase) || IsBusy)
                 return;
 
-            StartCoroutine(SendPayloadToGemini(null, userPhrase));
-        }
+            if (TestTurnHandler != null)
+            {
+                var mocked = TestTurnHandler(userPhrase);
+                if (mocked != null)
+                {
+                    ApplyParsedTurn(mocked, userPhrase);
+                }
+                return;
+            }
 
-        IEnumerator SendAudioToGemini(byte[] wav)
-        {
-            yield return SendPayloadToGemini(wav, null);
+            if (!HasGeminiKey)
+            {
+                SetLabel("NO GEMINI API KEY");
+                evaluation?.Feedback("Online Gemini connection is required. Add Assets/Resources/GeminiLocalKey.txt and connect to Wi-Fi.");
+                return;
+            }
+
+            if (Application.isBatchMode)
+                return;
+
+            evaluation?.NotifyPlayerThinking();
+            StartCoroutine(SendPayloadToGemini(null, userPhrase));
         }
 
         IEnumerator SendPayloadToGemini(byte[] wavBytes, string textInput)
         {
             string apiKey = ResolveGeminiKey();
             if (string.IsNullOrWhiteSpace(apiKey) || evaluation == null)
+            {
+                SetLabel("NO GEMINI API KEY");
+                evaluation?.Feedback("Google AI Studio API key is missing. Add Assets/Resources/GeminiLocalKey.txt.");
                 yield break;
+            }
+
+            if (Application.internetReachability == NetworkReachability.NotReachable)
+            {
+                SetLabel("OFFLINE · CONNECT WI-FI");
+                evaluation?.Feedback("Internet connection is required for Gemini AI conversation. Please connect to Wi-Fi and speak again.");
+                yield break;
+            }
 
             IsBusy = true;
             SetLabel("● THINKING...");
 
-            FoxHelpOption[] currentOptions = evaluation.GetCurrentContextualOptions();
+            RestaurantPromptContext promptContext = evaluation.BuildPromptContext();
             string systemPrompt = npcPersonality != null
-                ? npcPersonality.BuildSystemPrompt(
-                    evaluation.Stage.ToString(),
-                    evaluation.Dish,
-                    evaluation.Drink,
-                    evaluation.WaterType,
-                    evaluation.MenuInspected,
-                    currentOptions)
-                : "You are Lucas Moreau, a friendly Paris café waiter speaking simple A1/A2 French. Reply ONLY in JSON.";
+                ? npcPersonality.BuildDynamicCafeSystemPrompt(promptContext)
+                : "You are Lucas Moreau, a Parisian waiter speaking natural A2/B1 French, and a Fox tutor speaking English. Reply ONLY in JSON.";
 
             string historySummary = BuildHistoryText();
             string userInstruction = wavBytes != null
-                ? "Listen to the player's French/English audio clip below. Transcribe what they actually said, evaluate if it fulfills the current conversational step, and reply naturally in character."
-                : $"The player selected or spoke: \"{textInput}\". Evaluate and reply naturally in character.";
+                ? "Listen carefully to the player's audio clip. Transcribe accurately what they actually said (French or English). Decide speakerMode ('waiter' for French conversation with Lucas, 'fox_tutor' for English help/translation/vocabulary questions or purely English replies), evaluate any newly fulfilled milestones, and respond naturally."
+                : $"The player said: \"{textInput}\". Decide speakerMode, evaluate any newly fulfilled milestones, and respond naturally.";
 
             string partsJson;
             if (wavBytes != null)
@@ -517,58 +495,125 @@ namespace Alterlife.Immersive
                 partsJson = $"{{\"text\":{JsonEscape(historySummary + "\n" + userInstruction)}}}";
             }
 
-            string payload =
-                "{" +
-                $"\"systemInstruction\":{{\"parts\":[{{\"text\":{JsonEscape(systemPrompt)}}}]}}," +
-                $"\"contents\":[{{\"role\":\"user\",\"parts\":[{partsJson}]}}]," +
-                "\"generationConfig\":{\"responseMimeType\":\"application/json\",\"temperature\":0.55}" +
-                "}";
+            var candidateModels = BuildModelChain(geminiChatModel, "gemini-3.5-flash-lite", ChatFallbackModels);
+            string responseBody = null;
+            string lastError = null;
+            long lastCode = 0;
 
-            string url = $"https://generativelanguage.googleapis.com/v1beta/models/{geminiChatModel}:generateContent?key={apiKey}";
-            using (var request = new UnityWebRequest(url, "POST"))
+            for (int m = 0; m < candidateModels.Count; m++)
             {
-                operationRequest = request;
-                request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(payload));
-                request.downloadHandler = new DownloadHandlerBuffer();
-                request.SetRequestHeader("Content-Type", "application/json; charset=utf-8");
-                request.timeout = 25;
+                string model = candidateModels[m];
+                string thinkingLevel = model.IndexOf("3.8", StringComparison.OrdinalIgnoreCase) >= 0 ? "low" : "minimal";
+                string payload =
+                    "{" +
+                    $"\"systemInstruction\":{{\"parts\":[{{\"text\":{JsonEscape(systemPrompt)}}}]}}," +
+                    $"\"contents\":[{{\"role\":\"user\",\"parts\":[{partsJson}]}}]," +
+                    "\"generationConfig\":{" +
+                        "\"responseMimeType\":\"application/json\"," +
+                        $"\"thinkingConfig\":{{\"thinkingLevel\":\"{thinkingLevel}\"}}," +
+                        $"\"responseSchema\":{TurnResponseSchemaJson}" +
+                    "}" +
+                    "}";
 
-                yield return request.SendWebRequest();
-                operationRequest = null;
-                IsBusy = false;
-
-                if (request.result != UnityWebRequest.Result.Success)
+                string url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent";
+                using (var request = new UnityWebRequest(url, "POST"))
                 {
-                    Debug.LogWarning($"Gemini chat error: {request.error} - {request.downloadHandler?.text}");
-                    SetLabel("● LISTENING (FR)");
-                    if (!string.IsNullOrWhiteSpace(textInput))
-                        evaluation.SubmitTranscript(textInput);
-                    else
-                        evaluation.Feedback("Could not reach Gemini right now. Try speaking again or press Y for help.");
-                    yield break;
+                    operationRequest = request;
+                    request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(payload));
+                    request.downloadHandler = new DownloadHandlerBuffer();
+                    request.SetRequestHeader("Content-Type", "application/json; charset=utf-8");
+                    request.SetRequestHeader("x-goog-api-key", apiKey);
+                    request.timeout = 20;
+
+                    yield return request.SendWebRequest();
+                    operationRequest = null;
+
+                    if (request.result == UnityWebRequest.Result.Success)
+                    {
+                        responseBody = request.downloadHandler.text;
+                        break;
+                    }
+
+                    lastCode = request.responseCode;
+                    lastError = $"{request.error} - {request.downloadHandler?.text}";
+                    Debug.LogWarning($"[ParisVoice] Gemini chat ({model}) error {lastCode}: {lastError}");
+
+                    bool retryable = lastCode == 404 || lastCode == 429 || lastCode == 500 || lastCode == 503 || lastCode == 0;
+                    if (!retryable)
+                        break;
                 }
-
-                GeminiWaiterTurn turn = ParseGeminiTurn(request.downloadHandler.text);
-                if (turn == null || string.IsNullOrWhiteSpace(turn.npcReplyFrench))
-                {
-                    SetLabel("● LISTENING (FR)");
-                    if (!string.IsNullOrWhiteSpace(textInput))
-                        evaluation.SubmitTranscript(textInput);
-                    else
-                        evaluation.Feedback("I did not catch that clearly. Please speak again.");
-                    yield break;
-                }
-
-                string transcript = !string.IsNullOrWhiteSpace(turn.userTranscript) ? turn.userTranscript : textInput;
-                LastTranscript = transcript;
-
-                if (!string.IsNullOrWhiteSpace(transcript))
-                    RecordHistory("user", transcript);
-                RecordHistory("assistant", turn.npcReplyFrench);
-
-                evaluation.ApplyGeminiTurn(turn, usedCardSelection: !string.IsNullOrWhiteSpace(textInput));
-                SetLabel("● LISTENING (FR)");
             }
+
+            IsBusy = false;
+
+            if (string.IsNullOrWhiteSpace(responseBody))
+            {
+                SetLabel("GEMINI ERROR · RETRY");
+                evaluation.Feedback("Could not reach Google AI Studio (Gemini). Check your Wi-Fi connection and API key, then speak again.");
+                ResetVadCapture();
+                yield break;
+            }
+
+            GeminiWaiterTurn turn = ParseGeminiTurn(responseBody);
+            if (turn == null)
+            {
+                SetLabel("● LISTENING (FR)");
+                evaluation.Feedback("I did not catch that clearly. Please try speaking again.");
+                ResetVadCapture();
+                yield break;
+            }
+
+            bool isTutor = string.Equals(turn.speakerMode, "fox_tutor", StringComparison.OrdinalIgnoreCase);
+            bool hasReply = isTutor
+                ? !string.IsNullOrWhiteSpace(turn.foxTutorReplyEnglish)
+                : !string.IsNullOrWhiteSpace(turn.npcReplyFrench);
+
+            if (!hasReply)
+            {
+                SetLabel("● LISTENING (FR)");
+                evaluation.Feedback("I could not hear clear speech. Please try speaking again.");
+                ResetVadCapture();
+                yield break;
+            }
+
+            ApplyParsedTurn(turn, textInput);
+            SetLabel("● LISTENING (FR)");
+            ResetVadCapture();
+        }
+
+        static List<string> BuildModelChain(string primary, string defaultPrimary, string[] fallbacks)
+        {
+            var chain = new List<string>();
+            string first = string.IsNullOrWhiteSpace(primary) || primary.Equals("gemini-2.5-flash", StringComparison.OrdinalIgnoreCase)
+                ? defaultPrimary
+                : primary.Trim();
+            chain.Add(first);
+            if (!chain.Contains(defaultPrimary))
+                chain.Add(defaultPrimary);
+            if (fallbacks != null)
+            {
+                for (int i = 0; i < fallbacks.Length; i++)
+                    if (!string.IsNullOrWhiteSpace(fallbacks[i]) && !chain.Contains(fallbacks[i]))
+                        chain.Add(fallbacks[i]);
+            }
+            return chain;
+        }
+
+        void ApplyParsedTurn(GeminiWaiterTurn turn, string fallbackTranscript)
+        {
+            string transcript = !string.IsNullOrWhiteSpace(turn.userTranscript) ? turn.userTranscript.Trim() : fallbackTranscript;
+            LastTranscript = transcript;
+
+            if (!string.IsNullOrWhiteSpace(transcript))
+                RecordHistory("Player", transcript);
+
+            bool isTutor = string.Equals(turn.speakerMode, "fox_tutor", StringComparison.OrdinalIgnoreCase);
+            if (isTutor && !string.IsNullOrWhiteSpace(turn.foxTutorReplyEnglish))
+                RecordHistory("Fox (tutor)", turn.foxTutorReplyEnglish.Trim());
+            else if (!isTutor && !string.IsNullOrWhiteSpace(turn.npcReplyFrench))
+                RecordHistory("Lucas (waiter)", turn.npcReplyFrench.Trim());
+
+            evaluation?.ApplyGeminiTurn(turn);
         }
 
         string BuildHistoryText()
@@ -576,20 +621,20 @@ namespace Alterlife.Immersive
             if (history.Count == 0)
                 return "Conversation just started.";
 
-            var sb = new StringBuilder("Recent conversation:\n");
+            var sb = new StringBuilder("Conversation history so far:\n");
             for (int i = 0; i < history.Count; i++)
-                sb.AppendLine($"{history[i].role}: {history[i].content}");
+                sb.AppendLine($"{history[i].speaker}: {history[i].content}");
             return sb.ToString();
         }
 
-        void RecordHistory(string role, string content)
+        void RecordHistory(string who, string content)
         {
-            history.Add(new Turn { role = role, content = content });
-            if (history.Count > 12)
-                history.RemoveRange(0, history.Count - 12);
+            history.Add(new HistoryEntry { speaker = who, content = content });
+            if (history.Count > 18)
+                history.RemoveRange(0, history.Count - 18);
         }
 
-        static GeminiWaiterTurn ParseGeminiTurn(string rawBody)
+        public static GeminiWaiterTurn ParseGeminiTurn(string rawBody)
         {
             try
             {
@@ -615,123 +660,259 @@ namespace Alterlife.Immersive
             }
             catch (Exception ex)
             {
-                Debug.LogWarning("Failed to parse Gemini turn JSON: " + ex.Message);
+                Debug.LogWarning("[ParisVoice] Failed to parse Gemini turn JSON: " + ex.Message);
                 return null;
             }
         }
 
-        [Serializable] class RecordedLine { public string text; public string clip; }
-        [Serializable] class RecordedLines { public RecordedLine[] lines; }
-        RecordedLines narration;
-        AudioClip FindRecordedLine(string text)
-        {
-            if (narration == null)
-            {
-                var catalog = Resources.Load<TextAsset>("ParisWaiter/lines");
-                if (!catalog) return null;
-                narration = JsonUtility.FromJson<RecordedLines>(catalog.text);
-            }
-            foreach (var line in narration.lines)
-                if (line.text == text) return Resources.Load<AudioClip>("ParisWaiter/" + line.clip);
-            return null;
-        }
+        public void Speak(string text, AudioClip prerecorded = null) => SpeakAsWaiter(text);
 
-        public void Speak(string text, AudioClip prerecorded = null)
+        public void SpeakAsWaiter(string frenchText)
         {
-            if (!speaker) return;
-            if (!prerecorded) prerecorded = FindRecordedLine(text);
-            speaker.Stop();
-            if (speechRequest != null) { speechRequest.Abort(); speechRequest.Dispose(); speechRequest = null; }
-            if (speechRoutine != null) StopCoroutine(speechRoutine);
-            speechRoutine = null;
-            if (prerecorded) { speaker.clip = prerecorded; speaker.Play(); return; }
-            if (Application.isBatchMode) return;
-
-            if (HasGeminiKey)
-                speechRoutine = StartCoroutine(SynthesizeWithGeminiTts(text));
-            else if (IsConfigured)
-                speechRoutine = StartCoroutine(SynthesizeLegacy(text));
-        }
-
-        IEnumerator SynthesizeWithGeminiTts(string frenchText)
-        {
-            string apiKey = ResolveGeminiKey();
-            if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(frenchText))
-                yield break;
+            if (string.IsNullOrWhiteSpace(frenchText) || speaker == null)
+                return;
 
             string voiceName = npcPersonality != null && !string.IsNullOrWhiteSpace(npcPersonality.geminiVoiceName)
                 ? npcPersonality.geminiVoiceName
                 : "Puck";
 
-            string prompt = $"Read aloud warmly, naturally, and clearly in Parisian French for a beginner learner: {frenchText}";
+            SpeakOnTarget(
+                speaker,
+                frenchText,
+                voiceName,
+                "waiter_fr",
+                frenchText.Trim());
+        }
+
+        public void SpeakAsFox(string text, bool isFrenchModelPhrase)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return;
+
+            ResolveFoxSpeaker();
+            AudioSource target = foxSpeaker != null ? foxSpeaker : speaker;
+            if (target == null)
+                return;
+
+            string voiceName = npcPersonality != null && !string.IsNullOrWhiteSpace(npcPersonality.foxVoiceName)
+                ? npcPersonality.foxVoiceName
+                : "Aoede";
+
+            string styleTag = isFrenchModelPhrase ? "fox_fr" : "fox_en";
+            SpeakOnTarget(target, text, voiceName, styleTag, text.Trim());
+        }
+
+        void SpeakOnTarget(AudioSource target, string text, string voiceName, string styleTag, string prompt)
+        {
+            StopAllSpeech();
+
+            string cacheKey = $"{voiceName}|{styleTag}|{text}";
+            if (ttsCache.TryGetValue(cacheKey, out AudioClip cached) && cached != null)
+            {
+                target.clip = cached;
+                target.Play();
+                return;
+            }
+
+            if (Application.isBatchMode || !HasGeminiKey)
+                return;
+
+            speechRoutine = StartCoroutine(SynthesizeWithGeminiTts(target, cacheKey, voiceName, prompt));
+        }
+
+        public void StopAllSpeech()
+        {
+            if (speaker != null) speaker.Stop();
+            if (foxSpeaker != null) foxSpeaker.Stop();
+            if (speechRequest != null)
+            {
+                speechRequest.Abort();
+                speechRequest.Dispose();
+                speechRequest = null;
+            }
+            if (speechRoutine != null)
+            {
+                StopCoroutine(speechRoutine);
+                speechRoutine = null;
+            }
+            isSynthesizingSpeech = false;
+        }
+
+        IEnumerator SynthesizeWithGeminiTts(AudioSource target, string cacheKey, string voiceName, string verbatimText)
+        {
+            string apiKey = ResolveGeminiKey();
+            if (string.IsNullOrWhiteSpace(apiKey) || target == null)
+                yield break;
+
+            if (Application.internetReachability == NetworkReachability.NotReachable)
+                yield break;
+
+            isSynthesizingSpeech = true;
+
             string payload =
                 "{" +
-                $"\"contents\":[{{\"parts\":[{{\"text\":{JsonEscape(prompt)}}}]}}]," +
-                $"\"generationConfig\":{{\"responseModalities\":[\"AUDIO\"],\"speechConfig\":{{\"voiceConfig\":{{\"prebuiltVoiceConfig\":{{\"voiceName\":{JsonEscape(voiceName)}}}}}}}}}" +
+                $"\"contents\":[{{\"role\":\"user\",\"parts\":[{{\"text\":{JsonEscape(verbatimText)}}}]}}]," +
+                "\"generationConfig\":{" +
+                    "\"responseModalities\":[\"AUDIO\"]," +
+                    $"\"speechConfig\":{{\"voiceConfig\":{{\"prebuiltVoiceConfig\":{{\"voiceName\":{JsonEscape(voiceName)}}}}}}}" +
+                "}" +
                 "}";
 
-            string url = $"https://generativelanguage.googleapis.com/v1beta/models/{geminiTtsModel}:generateContent?key={apiKey}";
-            using (var request = new UnityWebRequest(url, "POST"))
+            var ttsChain = BuildModelChain(geminiTtsModel, "gemini-3.8-flash-lite-tts", TtsFallbackModels);
+            for (int m = 0; m < ttsChain.Count; m++)
             {
-                speechRequest = request;
-                request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(payload));
-                request.downloadHandler = new DownloadHandlerBuffer();
-                request.SetRequestHeader("Content-Type", "application/json; charset=utf-8");
-                request.timeout = 20;
-
-                yield return request.SendWebRequest();
-                speechRequest = null;
-
-                if (request.result != UnityWebRequest.Result.Success)
+                string model = ttsChain[m];
+                string url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent";
+                using (var request = new UnityWebRequest(url, "POST"))
                 {
-                    Debug.LogWarning($"Gemini TTS error: {request.error}");
-                    speechRoutine = null;
-                    yield break;
-                }
+                    speechRequest = request;
+                    request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(payload));
+                    request.downloadHandler = new DownloadHandlerBuffer();
+                    request.SetRequestHeader("Content-Type", "application/json; charset=utf-8");
+                    request.SetRequestHeader("x-goog-api-key", apiKey);
+                    request.timeout = 18;
 
-                try
-                {
-                    var resp = JsonUtility.FromJson<GeminiResponse>(request.downloadHandler.text);
-                    GeminiInlineData inline = null;
-                    if (resp?.candidates != null && resp.candidates.Length > 0 && resp.candidates[0].content?.parts != null)
+                    yield return request.SendWebRequest();
+                    speechRequest = null;
+
+                    if (request.result != UnityWebRequest.Result.Success)
                     {
-                        foreach (var part in resp.candidates[0].content.parts)
+                        long code = request.responseCode;
+                        Debug.LogWarning($"[ParisVoice] Gemini TTS ({model}) error ({code}): {request.error}");
+                        bool retryable = code == 404 || code == 429 || code == 500 || code == 503 || code == 0;
+                        if (retryable && m + 1 < ttsChain.Count)
+                            continue;
+                        break;
+                    }
+
+                    try
+                    {
+                        var resp = JsonUtility.FromJson<GeminiResponse>(request.downloadHandler.text);
+                        GeminiInlineData inline = null;
+                        if (resp?.candidates != null && resp.candidates.Length > 0 && resp.candidates[0].content?.parts != null)
                         {
-                            if (part.inlineData != null && !string.IsNullOrEmpty(part.inlineData.data))
+                            foreach (var part in resp.candidates[0].content.parts)
                             {
-                                inline = part.inlineData;
+                                if (part.inlineData != null && !string.IsNullOrEmpty(part.inlineData.data))
+                                {
+                                    inline = part.inlineData;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (inline != null)
+                        {
+                            byte[] rawAudio = Convert.FromBase64String(inline.data);
+                            AudioClip clip = DecodeGeminiAudio(rawAudio, inline.mimeType, $"GeminiVoice_{voiceName}");
+                            if (clip != null)
+                            {
+                                CacheTtsClip(cacheKey, clip);
+                                target.clip = clip;
+                                target.Play();
                                 break;
                             }
                         }
                     }
-
-                    if (inline != null)
+                    catch (Exception ex)
                     {
-                        int rate = ParseSampleRate(inline.mimeType, 24000);
-                        byte[] pcmBytes = Convert.FromBase64String(inline.data);
-                        int sampleCount = pcmBytes.Length / 2;
-                        float[] floatSamples = new float[sampleCount];
-                        for (int i = 0; i < sampleCount; i++)
-                        {
-                            short s = (short)(pcmBytes[i * 2] | (pcmBytes[i * 2 + 1] << 8));
-                            floatSamples[i] = s / 32768f;
-                        }
-
-                        if (speaker.clip && speaker.clip.name == "GeminiWaiterVoice")
-                            Destroy(speaker.clip);
-
-                        var clip = AudioClip.Create("GeminiWaiterVoice", sampleCount, 1, rate, false);
-                        clip.SetData(floatSamples, 0);
-                        speaker.clip = clip;
-                        speaker.Play();
+                        Debug.LogWarning("[ParisVoice] Gemini TTS decode error: " + ex.Message);
                     }
                 }
-                catch (Exception ex)
+            }
+
+            isSynthesizingSpeech = false;
+            speechRoutine = null;
+        }
+
+        void CacheTtsClip(string key, AudioClip clip)
+        {
+            if (ttsCache.ContainsKey(key)) return;
+            ttsCache[key] = clip;
+            ttsCacheOrder.Enqueue(key);
+
+            while (ttsCacheOrder.Count > MaxCachedTtsClips)
+            {
+                string oldest = ttsCacheOrder.Dequeue();
+                if (ttsCache.TryGetValue(oldest, out AudioClip oldClip))
                 {
-                    Debug.LogWarning("Gemini TTS decode error: " + ex.Message);
+                    ttsCache.Remove(oldest);
+                    if (oldClip != null &&
+                        (speaker == null || speaker.clip != oldClip) &&
+                        (foxSpeaker == null || foxSpeaker.clip != oldClip))
+                    {
+                        Destroy(oldClip);
+                    }
                 }
             }
-            speechRoutine = null;
+        }
+
+        /// <summary>
+        /// Decodes Gemini TTS audio supporting both RIFF/WAV containers (audio/wav) and headerless 16-bit PCM (audio/L16).
+        /// </summary>
+        public static AudioClip DecodeGeminiAudio(byte[] bytes, string mimeType, string clipName)
+        {
+            if (bytes == null || bytes.Length < 4)
+                return null;
+
+            int channels = 1;
+            int sampleRate = ParseSampleRate(mimeType, 24000);
+            int dataOffset = 0;
+            int dataLength = bytes.Length;
+
+            // Detect RIFF WAV container header cleanly
+            if (bytes.Length >= 44 &&
+                bytes[0] == (byte)'R' && bytes[1] == (byte)'I' &&
+                bytes[2] == (byte)'F' && bytes[3] == (byte)'F')
+            {
+                int pos = 12;
+                bool foundData = false;
+                while (pos + 8 <= bytes.Length)
+                {
+                    string chunkId = Encoding.ASCII.GetString(bytes, pos, 4);
+                    int chunkSize = BitConverter.ToInt32(bytes, pos + 4);
+                    int chunkDataStart = pos + 8;
+
+                    if (chunkId == "fmt " && chunkDataStart + 16 <= bytes.Length)
+                    {
+                        channels = Math.Max(1, (int)BitConverter.ToInt16(bytes, chunkDataStart + 2));
+                        sampleRate = Math.Max(8000, BitConverter.ToInt32(bytes, chunkDataStart + 4));
+                    }
+                    else if (chunkId == "data")
+                    {
+                        dataOffset = chunkDataStart;
+                        dataLength = Math.Min(chunkSize, bytes.Length - dataOffset);
+                        foundData = true;
+                        break;
+                    }
+
+                    if (chunkSize < 0) break;
+                    pos = chunkDataStart + chunkSize + (chunkSize & 1);
+                }
+
+                if (!foundData)
+                {
+                    dataOffset = 44;
+                    dataLength = Math.Max(0, bytes.Length - 44);
+                }
+            }
+
+            int totalSamples = dataLength / 2;
+            int framesPerChannel = totalSamples / channels;
+            if (framesPerChannel <= 0)
+                return null;
+
+            float[] samples = new float[framesPerChannel * channels];
+            for (int i = 0; i < samples.Length; i++)
+            {
+                int idx = dataOffset + i * 2;
+                short s = (short)(bytes[idx] | (bytes[idx + 1] << 8));
+                samples[i] = s / 32768f;
+            }
+
+            var clip = AudioClip.Create(clipName, framesPerChannel, channels, sampleRate, false);
+            clip.SetData(samples, 0);
+            return clip;
         }
 
         static int ParseSampleRate(string mimeType, int fallback)
@@ -743,103 +924,83 @@ namespace Alterlife.Immersive
                 : fallback;
         }
 
-        IEnumerator SynthesizeLegacy(string text)
-        {
-            string url = serviceUrl.TrimEnd('/') + "/speak";
-            using (var request = new UnityWebRequest(url, "POST"))
-            {
-                speechRequest = request;
-                request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(JsonUtility.ToJson(new SpokenLine { text = text })));
-                request.downloadHandler = new DownloadHandlerAudioClip(url, AudioType.WAV);
-                request.SetRequestHeader("Content-Type", "application/json"); request.timeout = 20;
-                yield return request.SendWebRequest(); speechRequest = null;
-                if (request.result == UnityWebRequest.Result.Success)
-                {
-                    if (speaker.clip && speaker.clip.name == "Generated restaurant speech") Destroy(speaker.clip);
-                    speaker.clip = DownloadHandlerAudioClip.GetContent(request); speaker.clip.name = "Generated restaurant speech"; speaker.Play();
-                }
-                else evaluation?.Feedback("The waiter's voice is unavailable. The French dialogue remains visible.");
-            }
-            speechRoutine = null;
-        }
-
         public void Practice(string text)
         {
-            if (HasGeminiKey)
-            {
-                SubmitTextToGemini(text);
-                return;
-            }
-            if (!IsConfigured || IsBusy) return;
-            StartCoroutine(ChatLegacy(text));
+            SubmitTextToGemini(text);
         }
 
-        IEnumerator ChatLegacy(string text)
+        void SetLabel(string value)
         {
-            IsBusy = true;
-            RecordHistory("user", text);
-            var body = new ChatRequest { dish = evaluation.Dish, drink = evaluation.Drink, history = history.ToArray() };
-            using (var request = new UnityWebRequest(serviceUrl.TrimEnd('/') + "/chat", "POST"))
-            {
-                operationRequest = request;
-                request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(JsonUtility.ToJson(body)));
-                request.downloadHandler = new DownloadHandlerBuffer(); request.SetRequestHeader("Content-Type", "application/json"); request.timeout = 25;
-                yield return request.SendWebRequest(); operationRequest = null; IsBusy = false;
-                if (request.result != UnityWebRequest.Result.Success) { Fail("Conversation is temporarily unavailable. Your evaluation is saved."); yield break; }
-                string reply = null;
-                try { reply = JsonUtility.FromJson<ChatReply>(request.downloadHandler.text)?.reply; } catch (ArgumentException) { }
-                if (string.IsNullOrWhiteSpace(reply)) { Fail("Please try your question again."); yield break; }
-                RecordHistory("assistant", reply);
-                evaluation?.ReceivePracticeReply(reply);
-            }
+            if (microphoneLabel != null)
+                microphoneLabel.text = value;
         }
-
-        void Fail(string message) { IsBusy = false; SetLabel("START SPEAKING"); evaluation?.Feedback(message); }
-        void SetLabel(string value) { if (microphoneLabel) microphoneLabel.text = value; }
 
         public void ResetConversation()
         {
             if (!string.IsNullOrEmpty(device) && Microphone.IsRecording(device))
-            {
                 Microphone.End(device);
-            }
+
             IsRecording = IsBusy = false;
             micBootstrapped = false;
-            operationRequest?.Abort(); speechRequest?.Abort();
+            if (operationRequest != null)
+            {
+                operationRequest.Abort();
+                operationRequest.Dispose();
+                operationRequest = null;
+            }
+            StopAllSpeech();
             StopAllCoroutines();
-            if (micRingClip) Destroy(micRingClip);
-            micRingClip = null; operationRequest = speechRequest = null; speechRoutine = null;
-            history.Clear(); LastTranscript = null;
-            ResetVadCapture(resetProlongedPause: true);
-            if (speaker) speaker.Stop();
-            localRecognizer?.Dispose(); localRecognizer = null;
-            englishRecognizer?.Dispose(); englishRecognizer = null;
 
-            if (Continuous && !Application.isBatchMode)
+            if (micRingClip) Destroy(micRingClip);
+            micRingClip = null;
+            history.Clear();
+            LastTranscript = null;
+            ResetVadCapture();
+
+            if (Application.isBatchMode)
+                return;
+
+            if (!HasGeminiKey)
+            {
+                SetLabel("NO GEMINI API KEY");
+                return;
+            }
+
+            if (autoListenVad && isActiveAndEnabled && gameObject.activeInHierarchy)
             {
                 SetLabel("STARTING MICROPHONE");
-                if (autoListenVad && isActiveAndEnabled && gameObject.activeInHierarchy)
-                    StartCoroutine(EnsureMicrophoneRingRunning());
+                StartCoroutine(EnsureMicrophoneRingRunning());
             }
             else
             {
-                SetLabel(IsConfigured ? "START SPEAKING" : "VOICE OFFLINE\nUSE RESPONSE CARDS");
+                SetLabel("● READY");
             }
         }
 
         void OnDisable()
         {
-            localRecognizer?.Dispose(); localRecognizer = null;
-            englishRecognizer?.Dispose(); englishRecognizer = null;
             if (!string.IsNullOrEmpty(device) && Microphone.IsRecording(device))
                 Microphone.End(device);
             IsRecording = IsBusy = false;
             micBootstrapped = false;
-            operationRequest?.Abort();
-            speechRequest?.Abort();
+            if (operationRequest != null)
+            {
+                operationRequest.Abort();
+                operationRequest.Dispose();
+                operationRequest = null;
+            }
+            StopAllSpeech();
             StopAllCoroutines();
             if (micRingClip) Destroy(micRingClip);
             micRingClip = null;
+        }
+
+        void OnDestroy()
+        {
+            foreach (var kv in ttsCache)
+                if (kv.Value != null) Destroy(kv.Value);
+            ttsCache.Clear();
+            ttsCacheOrder.Clear();
         }
 
         static string JsonEscape(string value)
