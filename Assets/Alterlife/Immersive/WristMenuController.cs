@@ -3,6 +3,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.XR;
+using UnityEngine.XR.Interaction.Toolkit.Interactors;
 
 namespace Alterlife.Immersive
 {
@@ -23,9 +24,7 @@ namespace Alterlife.Immersive
 
         [Header("Wrist Attachment Offsets")]
         [SerializeField] private Vector3 controllerLocalOffset = new Vector3(0.02f, 0.055f, -0.04f);
-        [SerializeField] private Vector3 controllerLocalEuler = new Vector3(28f, 180f, 0f);
         [SerializeField] private Vector3 handLocalOffset = new Vector3(0.0f, 0.065f, -0.06f);
-        [SerializeField] private Vector3 handLocalEuler = new Vector3(25f, 180f, 0f);
 
         [Header("Scene Systems")]
         [SerializeField] private ComfortOptions comfortOptions;
@@ -44,6 +43,7 @@ namespace Alterlife.Immersive
         private bool pinnedOpenByButton;
         private bool wasLeftXPressed;
         private bool isVisible = true;
+        private float visibleSince;
         private readonly List<Renderer> cachedRenderers = new List<Renderer>();
         private readonly List<Collider> cachedColliders = new List<Collider>();
         private readonly List<TMP_Text> cachedTexts = new List<TMP_Text>();
@@ -54,6 +54,7 @@ namespace Alterlife.Immersive
                 menuCanvas = gameObject;
 
             CacheVisualComponents();
+            SetMenuVisible(false);
         }
 
         private void Start()
@@ -132,11 +133,19 @@ namespace Alterlife.Immersive
             if (headCamera == null && Camera.main != null)
                 headCamera = Camera.main.transform;
 
-            FollowActiveLeftWrist();
+            var wrist = FollowActiveLeftWrist();
             PollLeftControllerXButton();
 
-            if (menuCanvas == null || headCamera == null)
+            if (menuCanvas == null || headCamera == null || !wrist)
+            {
+                SetMenuVisible(false);
                 return;
+            }
+
+            Vector3 fromHead = transform.position - headCamera.position;
+            if (fromHead.sqrMagnitude < 0.0001f) { SetMenuVisible(false); return; }
+            // Labels and buttons sit on the panel's negative Z face.
+            transform.rotation = Quaternion.LookRotation(fromHead, headCamera.up);
 
             if (forceVisibleForDebug || pinnedOpenByButton)
             {
@@ -144,16 +153,14 @@ namespace Alterlife.Immersive
                 return;
             }
 
-            Vector3 wristFaceNormal = -transform.forward;
-            Vector3 toHead = (headCamera.position - transform.position).normalized;
-            float angle = Vector3.Angle(wristFaceNormal, toHead);
-            SetMenuVisible(angle <= activationAngle);
+            float angle = Vector3.Angle(wrist.up, -fromHead);
+            SetMenuVisible(angle <= activationAngle && Vector3.Angle(headCamera.forward, fromHead) < 55f);
         }
 
-        void FollowActiveLeftWrist()
+        Transform FollowActiveLeftWrist()
         {
             if (multimodalRig == null)
-                return;
+                return null;
 
             bool useController = multimodalRig.ControllersActive;
             GameObject target = useController ? multimodalRig.leftController : multimodalRig.leftHand;
@@ -163,14 +170,23 @@ namespace Alterlife.Immersive
                 useController = !useController;
             }
 
-            if (target == null)
-                return;
+            if (target == null || !target.activeInHierarchy)
+                return null;
 
             Vector3 localPos = useController ? controllerLocalOffset : handLocalOffset;
-            Vector3 localEuler = useController ? controllerLocalEuler : handLocalEuler;
 
             transform.position = target.transform.TransformPoint(localPos);
-            transform.rotation = target.transform.rotation * Quaternion.Euler(localEuler);
+            return target.transform;
+        }
+
+        internal bool AcceptsPress(IXRInteractor interactor, bool activated)
+        {
+            if (!isVisible || Time.unscaledTime - visibleSince < .25f || !multimodalRig ||
+                !(interactor is XRBaseInputInteractor input)) return false;
+            var t = input.transform;
+            bool onRight = (multimodalRig.rightHand && t.IsChildOf(multimodalRig.rightHand.transform)) ||
+                           (multimodalRig.rightController && t.IsChildOf(multimodalRig.rightController.transform));
+            return onRight && (activated ? input.activateInput : input.selectInput).ReadWasPerformedThisFrame();
         }
 
         void PollLeftControllerXButton()
@@ -196,6 +212,7 @@ namespace Alterlife.Immersive
                 return;
 
             isVisible = visible;
+            if (visible) visibleSince = Time.unscaledTime;
 
             // Keep GameObjects active in hierarchy so scene queries/validations continue to find controls cleanly.
             for (int i = 0; i < cachedRenderers.Count; i++)

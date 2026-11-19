@@ -99,6 +99,8 @@ namespace Alterlife.Immersive.Editor
             Assert(Vector2.Distance(new Vector2(head.x, head.z), new Vector2(0, 7.8f)) < .05f, "Book scene spawns in front of the desk");
             Assert(UnityEngine.Object.FindObjectsByType<Unity.XR.CoreUtils.XROrigin>().Length == 1, "Book scene has one XR rig");
             Assert(UnityEngine.Object.FindAnyObjectByType<InteractiveBook>() != null, "Existing book preserved");
+            var wristCheck = CheckOpenWrist();
+            while (wristCheck.MoveNext()) yield return null;
             movement = CheckTeleport(new Vector3(1, 0, 7.6f));
             while (movement.MoveNext()) yield return null;
             var book = UnityEngine.Object.FindAnyObjectByType<InteractiveBook>(); book.Open();
@@ -123,6 +125,9 @@ namespace Alterlife.Immersive.Editor
                 AssertNoMissing(go.gameObject);
             Assert(eval.experience.scenePath == ParisPrototypeBuilder.ScenePath && Application.CanStreamedLevelBeLoaded(eval.experience.scenePath), "Book restaurant definition loads Paris");
             Assert(!eval.voice.IsConfigured, "No fake speech/AI service or embedded credential configured");
+            Assert(eval.voice.speaker.clip && eval.voice.speaker.clip.length > 1f, "French welcome has a playable recording without a voice service");
+            wristCheck = CheckOpenWrist();
+            while (wristCheck.MoveNext()) yield return null;
             SetupPreview();
             Assert(GameObject.Find("Paris cityscape") && GameObject.Find("Cafe terrace detailing"), "Authored city and terrace detailing are present");
             var visible = UnityEngine.Object.FindObjectsByType<MeshRenderer>().Where(r => r.enabled && r.gameObject.activeInHierarchy).ToArray();
@@ -149,7 +154,12 @@ namespace Alterlife.Immersive.Editor
             manager.SelectEnter((IXRSelectInteractor)direct, (IXRSelectInteractable)menuGrab);
             Assert(eval.MenuInspected, "XRI menu grab registers inspection");
             manager.SelectExit((IXRSelectInteractor)direct, (IXRSelectInteractable)menuGrab); UnityEngine.Object.Destroy(hand);
-            eval.ShowHelp(); eval.UseAnswerA(); Assert(eval.Stage == RestaurantStage.Recommendation, "Assisted readiness advances with recorded help");
+            eval.SubmitTranscript("What does sparkling mean?");
+            Assert(eval.companion.IsShowingHelp, "English question summons fox");
+            eval.UseAnswerA();
+            Assert(eval.Stage == RestaurantStage.ReadMenu && eval.voice.speaker.clip.name.StartsWith("fox-"), "Card models pronunciation without submitting");
+            eval.SubmitTranscript(eval.GetCurrentContextualOptions()[0].french);
+            Assert(eval.Stage == RestaurantStage.Recommendation, "Assisted readiness advances with recorded help");
             encounter.OnVoiceTranscriptionReceived("Qu'est-ce que vous me conseillez ?"); Assert(eval.Stage == RestaurantStage.Meal, "Ask about menu milestone");
             encounter.OnVoiceTranscriptionReceived("Je ne veux pas de salade"); Assert(eval.Stage == RestaurantStage.Meal, "Negated dish is not accepted as an order");
             encounter.OnVoiceTranscriptionReceived("Une salade s'il vous plaît"); Assert(eval.Dish == "salade" && eval.Stage == RestaurantStage.Drink, "Menu choice recorded");
@@ -181,6 +191,29 @@ namespace Alterlife.Immersive.Editor
             yield return null; yield return null;
             Assert(UnityEngine.Object.FindAnyObjectByType<AnchoredGlobe>() && !UnityEngine.Object.FindAnyObjectByType<InteractiveBook>(), "Book return control loads world selection without a duplicate room");
         }
+        static IEnumerator CheckOpenWrist()
+        {
+            var scene = SceneManager.GetActiveScene();
+            var menu = UnityEngine.Object.FindAnyObjectByType<WristMenuController>();
+            var settings = new SerializedObject(menu);
+            settings.FindProperty("forceVisibleForDebug").boolValue = true;
+            settings.ApplyModifiedPropertiesWithoutUndo();
+            var rig = UnityEngine.Object.FindAnyObjectByType<QuestMultimodalRig>();
+            var wrist = rig.leftController.activeInHierarchy ? rig.leftController : rig.leftHand;
+            wrist.SetActive(true);
+            wrist.transform.position = Camera.main.transform.TransformPoint(new Vector3(-.2f,-.1f,.45f));
+            var stop = Time.time + .5f;
+            while (Time.time < stop) yield return null;
+            Assert(Vector3.Dot(-menu.transform.forward, (Camera.main.transform.position-menu.transform.position).normalized) > .99f, "The readable wrist face points towards the player");
+            var back = settings.FindProperty("returnButtonObject").objectReferenceValue as GameObject;
+            var button = back.GetComponent<XRSimpleInteractable>();
+            var left = wrist.GetComponentInChildren<XRBaseInteractor>(true);
+            button.selectEntered.Invoke(new SelectEnterEventArgs { interactorObject = left, interactableObject = button });
+            stop = Time.time + .8f;
+            while (Time.time < stop) yield return null;
+            Assert(SceneManager.GetActiveScene() == scene, "Opening the menu and overlapping Back with the wearing hand keeps the current scene");
+        }
+
         static IEnumerator CheckTeleport(Vector3 destination)
         {
             var rig = UnityEngine.Object.FindAnyObjectByType<Unity.XR.CoreUtils.XROrigin>();

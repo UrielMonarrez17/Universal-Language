@@ -52,6 +52,7 @@ namespace Alterlife.Immersive
         public bool IsRecording { get; private set; }
         public bool IsBusy { get; private set; }
         public string LastTranscript { get; private set; }
+        public float HelpDelay => prolongedPauseSeconds;
         public float SilenceDuration { get; private set; }
 
         const int SampleRate = 16000;
@@ -66,6 +67,10 @@ namespace Alterlife.Immersive
         float silenceEndAccum;
         float utteranceLengthSeconds;
         bool silenceHelpTriggered;
+        FrenchSpeechRecognizer localRecognizer, englishRecognizer;
+        float nextMicAttempt;
+        bool CanCapture => IsAiReady || FrenchSpeechRecognizer.Supported;
+        bool Continuous => autoListenVad && CanCapture;
         bool micPermissionDenied;
         bool micBootstrapped;
         bool wasSpeakerPlaying;
@@ -93,7 +98,7 @@ namespace Alterlife.Immersive
         public sealed class GeminiWaiterTurn
         {
             public string userTranscript;
-            public string npcReplyFrench;
+            public string npcReplyFrench, npcReplyEnglish;
             public string feedbackEnglish;
             public bool advanceObjective;
             public string detectedDish;
@@ -121,28 +126,7 @@ namespace Alterlife.Immersive
             if (npcPersonality == null)
                 npcPersonality = FindAnyObjectByType<NPCPersonality>();
 
-            if (Application.isBatchMode)
-            {
-                SetLabel("VOICE OFFLINE\nUSE RESPONSE CARDS");
-                return;
-            }
-
-            if (HasGeminiKey)
-            {
-                SetLabel(autoListenVad ? "● LISTENING (FR)" : "READY");
-                if (autoListenVad)
-                    StartCoroutine(EnsureMicrophoneRingRunning());
-            }
-            else if (IsConfigured)
-            {
-                SetLabel("START SPEAKING");
-                if (evaluation != null)
-                    evaluation.Feedback("The waiter's voice is AI-generated. Speak in French.");
-            }
-            else
-            {
-                SetLabel("VOICE OFFLINE\nUSE RESPONSE CARDS");
-            }
+            // RestaurantEvaluation.Begin owns capture startup and the initial prompt.
         }
 
         IEnumerator EnsureMicrophoneRingRunning()
@@ -151,14 +135,19 @@ namespace Alterlife.Immersive
                 yield break;
 
             micBootstrapped = true;
+            SetLabel("STARTING MICROPHONE");
 
 #if UNITY_ANDROID && !UNITY_EDITOR
             if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone))
             {
-                UnityEngine.Android.Permission.RequestUserPermission(UnityEngine.Android.Permission.Microphone);
-                float deadline = Time.realtimeSinceStartup + 15f;
+                bool answered = false;
+                var callbacks = new UnityEngine.Android.PermissionCallbacks();
+                callbacks.PermissionGranted += _ => answered = true;
+                callbacks.PermissionDenied += _ => answered = true;
+                SetLabel("ALLOW MICROPHONE IN QUEST");
+                UnityEngine.Android.Permission.RequestUserPermission(UnityEngine.Android.Permission.Microphone, callbacks);
                 while (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone) &&
-                       Time.realtimeSinceStartup < deadline)
+                       !answered)
                 {
                     yield return null;
                 }
@@ -166,6 +155,7 @@ namespace Alterlife.Immersive
                 if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone))
                 {
                     micPermissionDenied = true;
+                    micBootstrapped = false;
                     SetLabel("MIC DENIED · PRESS Y");
                     if (evaluation != null)
                         evaluation.Feedback("Microphone permission needed for voice. Press Y for Fox options.");
@@ -176,8 +166,26 @@ namespace Alterlife.Immersive
             yield return null;
 #endif
 
+            if (!IsAiReady && FrenchSpeechRecognizer.Supported && localRecognizer?.Ready != true)
+            {
+                SetLabel("LOADING FRENCH VOICE");
+                localRecognizer?.Dispose();
+                localRecognizer = new FrenchSpeechRecognizer();
+                yield return localRecognizer.Prepare();
+                englishRecognizer?.Dispose();
+                englishRecognizer = new FrenchSpeechRecognizer("vosk-model-small-en-us-0.15");
+                yield return englishRecognizer.Prepare();
+                if (!localRecognizer.Ready)
+                {
+                    SetLabel("VOICE UNAVAILABLE · PRESS Y");
+                    micBootstrapped = false;
+                    nextMicAttempt = Time.realtimeSinceStartup + 10f;
+                    yield break;
+                }
+            }
             if (Microphone.devices.Length == 0)
             {
+                micBootstrapped = false; nextMicAttempt = Time.realtimeSinceStartup + 3f;
                 SetLabel("NO MIC · PRESS Y");
                 yield break;
             }
@@ -186,10 +194,12 @@ namespace Alterlife.Immersive
             micRingClip = Microphone.Start(device, true, RingBufferSeconds, SampleRate);
             if (micRingClip == null)
             {
+                micBootstrapped = false; nextMicAttempt = Time.realtimeSinceStartup + 3f;
                 SetLabel("MIC UNAVAILABLE");
                 yield break;
             }
 
+            Debug.Log("[ParisVoice] Microphone capture started at " + micRingClip.frequency + " Hz.");
             lastReadSamplePos = 0;
             IsRecording = true;
         }
@@ -206,7 +216,7 @@ namespace Alterlife.Immersive
                 return;
             }
 
-            if (!autoListenVad || !HasGeminiKey || evaluation == null)
+            if (!Continuous || evaluation == null)
                 return;
 
             bool waiterTalking = speaker != null && speaker.isPlaying;
@@ -224,23 +234,23 @@ namespace Alterlife.Immersive
                 return;
             }
 
-            // Track prolonged pause while it is the player's turn to respond.
-            if (!isCapturingUtterance)
+            if (!IsRecording || !micRingClip || !Microphone.IsRecording(device))
             {
-                SilenceDuration += Time.unscaledDeltaTime;
-                if (SilenceDuration >= prolongedPauseSeconds && !silenceHelpTriggered)
+                if (IsRecording)
                 {
-                    silenceHelpTriggered = true;
-                    evaluation.OnProlongedUserPause();
+                    IsRecording = micBootstrapped = false;
+                    if (micRingClip) Destroy(micRingClip);
+                    micRingClip = null;
+                    ResetVadCapture(true);
                 }
-            }
-
-            if (micRingClip == null || string.IsNullOrEmpty(device) || !Microphone.IsRecording(device))
-            {
-                SetLabel("● PRESS Y FOR HELP");
+#if UNITY_ANDROID && !UNITY_EDITOR
+                if (micPermissionDenied && UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone))
+                    micPermissionDenied = false;
+#endif
+                if (!micBootstrapped && !micPermissionDenied && Time.realtimeSinceStartup >= nextMicAttempt)
+                    StartCoroutine(EnsureMicrophoneRingRunning());
                 return;
             }
-
             UpdateContinuousVad();
         }
 
@@ -315,33 +325,44 @@ namespace Alterlife.Immersive
                     byte[] wav = EncodeWav(pcm, micRingClip.channels, micRingClip.frequency);
 
                     ResetVadCapture(resetProlongedPause: true);
-                    StartCoroutine(SendAudioToGemini(wav));
+                    StartCoroutine(ProcessUtterance(wav));
                 }
             }
         }
 
-        void ReadRingSlice(int startSample, int count, float[] dest)
+        IEnumerator ProcessUtterance(byte[] wav)
         {
-            int total = micRingClip.samples;
-            if (startSample + count <= total)
+            if (HasGeminiKey) yield return SendAudioToGemini(wav);
+            else if (IsConfigured) yield return TranscribeLegacy(wav);
+            else if (localRecognizer?.Ready == true)
             {
-                var temp = new float[count];
-                micRingClip.GetData(temp, startSample);
-                Array.Copy(temp, 0, dest, 0, count);
+                IsBusy = true;
+                SetLabel("CHECKING YOUR ANSWER");
+                // EncodeWav produces a 44-byte PCM header. Vosk expects raw PCM16.
+                var pcm = new byte[wav.Length - 44];
+                Buffer.BlockCopy(wav, 44, pcm, 0, pcm.Length);
+                var work = localRecognizer.Decode(pcm, SampleRate);
+                var english = englishRecognizer?.Ready == true ? englishRecognizer.Decode(pcm, SampleRate) : null;
+                while (!work.IsCompleted || (english != null && !english.IsCompleted)) yield return null;
+                IsBusy = false;
+                LastTranscript = work.IsFaulted ? "" : work.Result;
+                if (english != null && !english.IsFaulted && RestaurantTutor.IsEnglishQuestion(english.Result))
+                {
+                    string fr = LastTranscript;
+                    LastTranscript = english.Result;
+                    if (RestaurantTutor.Definition(LastTranscript) == null && RestaurantTutor.Definition(LastTranscript + " " + fr) != null)
+                        LastTranscript += " " + fr;
+                }
+                evaluation?.SubmitTranscript(LastTranscript);
             }
-            else
-            {
-                int first = total - startSample;
-                int second = count - first;
-                var part1 = new float[first];
-                var part2 = new float[second];
-                micRingClip.GetData(part1, startSample);
-                micRingClip.GetData(part2, 0);
-                Array.Copy(part1, 0, dest, 0, first);
-                Array.Copy(part2, 0, dest, first, second);
-            }
+            ResetVadCapture(true);
         }
 
+        void ReadRingSlice(int startSample, int count, float[] dest)
+        {
+            // Unity wraps GetData at the end of the clip. Reuse the RMS buffer each frame.
+            micRingClip.GetData(dest.AsSpan(0, count), startSample);
+        }
         void ResetVadCapture(bool resetProlongedPause)
         {
             isCapturingUtterance = false;
@@ -370,7 +391,7 @@ namespace Alterlife.Immersive
         {
             if (IsBusy) return;
 
-            if (HasGeminiKey)
+            if (Continuous)
             {
                 if (!micBootstrapped)
                     StartCoroutine(EnsureMicrophoneRingRunning());
@@ -599,13 +620,32 @@ namespace Alterlife.Immersive
             }
         }
 
+        [Serializable] class RecordedLine { public string text; public string clip; }
+        [Serializable] class RecordedLines { public RecordedLine[] lines; }
+        RecordedLines narration;
+        AudioClip FindRecordedLine(string text)
+        {
+            if (narration == null)
+            {
+                var catalog = Resources.Load<TextAsset>("ParisWaiter/lines");
+                if (!catalog) return null;
+                narration = JsonUtility.FromJson<RecordedLines>(catalog.text);
+            }
+            foreach (var line in narration.lines)
+                if (line.text == text) return Resources.Load<AudioClip>("ParisWaiter/" + line.clip);
+            return null;
+        }
+
         public void Speak(string text, AudioClip prerecorded = null)
         {
-            if (!speaker || Application.isBatchMode) return;
+            if (!speaker) return;
+            if (!prerecorded) prerecorded = FindRecordedLine(text);
             speaker.Stop();
             if (speechRequest != null) { speechRequest.Abort(); speechRequest.Dispose(); speechRequest = null; }
             if (speechRoutine != null) StopCoroutine(speechRoutine);
+            speechRoutine = null;
             if (prerecorded) { speaker.clip = prerecorded; speaker.Play(); return; }
+            if (Application.isBatchMode) return;
 
             if (HasGeminiKey)
                 speechRoutine = StartCoroutine(SynthesizeWithGeminiTts(text));
@@ -759,7 +799,7 @@ namespace Alterlife.Immersive
 
         public void ResetConversation()
         {
-            if (IsRecording && !string.IsNullOrEmpty(device))
+            if (!string.IsNullOrEmpty(device) && Microphone.IsRecording(device))
             {
                 Microphone.End(device);
             }
@@ -772,10 +812,12 @@ namespace Alterlife.Immersive
             history.Clear(); LastTranscript = null;
             ResetVadCapture(resetProlongedPause: true);
             if (speaker) speaker.Stop();
+            localRecognizer?.Dispose(); localRecognizer = null;
+            englishRecognizer?.Dispose(); englishRecognizer = null;
 
-            if (HasGeminiKey && !Application.isBatchMode)
+            if (Continuous && !Application.isBatchMode)
             {
-                SetLabel(autoListenVad ? "● LISTENING (FR)" : "READY");
+                SetLabel("STARTING MICROPHONE");
                 if (autoListenVad && isActiveAndEnabled && gameObject.activeInHierarchy)
                     StartCoroutine(EnsureMicrophoneRingRunning());
             }
@@ -787,7 +829,9 @@ namespace Alterlife.Immersive
 
         void OnDisable()
         {
-            if (IsRecording && !string.IsNullOrEmpty(device))
+            localRecognizer?.Dispose(); localRecognizer = null;
+            englishRecognizer?.Dispose(); englishRecognizer = null;
+            if (!string.IsNullOrEmpty(device) && Microphone.IsRecording(device))
                 Microphone.End(device);
             IsRecording = IsBusy = false;
             micBootstrapped = false;

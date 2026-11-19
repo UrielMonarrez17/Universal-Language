@@ -20,6 +20,7 @@ namespace Alterlife.Immersive
 
         XRSimpleInteractable interactable;
         PhysicalPokeFilter pokeFilter;
+        WristMenuController wristMenu;
         MaterialPropertyBlock block;
         Color original;
         float lastPress = -10f;
@@ -27,6 +28,7 @@ namespace Alterlife.Immersive
         void Awake()
         {
             interactable = GetComponent<XRSimpleInteractable>();
+            wristMenu = GetComponentInParent<WristMenuController>();
             block = new MaterialPropertyBlock();
 
             if (feedbackRenderer != null)
@@ -66,13 +68,16 @@ namespace Alterlife.Immersive
 
         void Selected(SelectEnterEventArgs args)
         {
-            if (IsControllerGripOnly(args.interactorObject))
+            if ((wristMenu && !wristMenu.AcceptsPress(args.interactorObject, false)) || IsControllerGripOnly(args.interactorObject))
                 return;
 
             Press();
         }
 
-        void Activated(ActivateEventArgs _) => Press();
+        void Activated(ActivateEventArgs args)
+        {
+            if (!wristMenu || wristMenu.AcceptsPress(args.interactorObject, true)) Press();
+        }
         void Hover(HoverEnterEventArgs _) => Tint(hoverColor, true);
         void Unhover(HoverExitEventArgs _) => Tint(original, false);
 

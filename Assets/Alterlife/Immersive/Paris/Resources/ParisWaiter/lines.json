@@ -1,0 +1,214 @@
+{
+  "lines": [
+    {
+      "text": "Bonjour ! Bienvenue. Voici le menu.",
+      "clip": "waiter-01",
+      "english": "Hello! Welcome. Here is the menu."
+    },
+    {
+      "text": "Je vous laisse regarder le menu. Dites-moi quand vous êtes prêt.",
+      "clip": "waiter-02",
+      "english": "Take a look at the menu. Let me know when you are ready."
+    },
+    {
+      "text": "Vous voulez un conseil ?",
+      "clip": "waiter-03",
+      "english": "Would you like a recommendation?"
+    },
+    {
+      "text": "Je vous conseille le croque-monsieur. Il contient du jambon et du fromage. Vous préférez un plat chaud ou une salade ?",
+      "clip": "waiter-04",
+      "english": "I recommend the toasted ham and cheese sandwich. Would you prefer a hot dish or a salad?"
+    },
+    {
+      "text": "Et comme boisson ?",
+      "clip": "waiter-05",
+      "english": "And what would you like to drink?"
+    },
+    {
+      "text": "De l'eau plate ou gazeuse ?",
+      "clip": "waiter-06",
+      "english": "Still or sparkling water?"
+    },
+    {
+      "text": "C'est bien ça ?",
+      "clip": "waiter-07",
+      "english": "Is that right?"
+    },
+    {
+      "text": "Alors, une salade et une eau plate. C'est bien ça ?",
+      "clip": "waiter-08",
+      "english": "So, a salad and still water. Is that right?"
+    },
+    {
+      "text": "Alors, une salade et une eau gazeuse. C'est bien ça ?",
+      "clip": "waiter-09",
+      "english": "So, a salad and sparkling water. Is that right?"
+    },
+    {
+      "text": "Alors, une salade et un café. C'est bien ça ?",
+      "clip": "waiter-10",
+      "english": "So, a salad and a coffee. Is that right?"
+    },
+    {
+      "text": "Alors, un croque-monsieur et une eau plate. C'est bien ça ?",
+      "clip": "waiter-11",
+      "english": "So, a toasted ham and cheese sandwich and still water. Is that right?"
+    },
+    {
+      "text": "Alors, un croque-monsieur et une eau gazeuse. C'est bien ça ?",
+      "clip": "waiter-12",
+      "english": "So, a toasted ham and cheese sandwich and sparkling water. Is that right?"
+    },
+    {
+      "text": "Alors, un croque-monsieur et un café. C'est bien ça ?",
+      "clip": "waiter-13",
+      "english": "So, a toasted ham and cheese sandwich and a coffee. Is that right?"
+    },
+    {
+      "text": "Très bien, votre commande arrive bientôt. Merci !",
+      "clip": "waiter-14",
+      "english": "Very good, your order will be here soon. Thank you!"
+    },
+    {
+      "text": "Vous visitez Paris pour la première fois ?",
+      "clip": "waiter-15",
+      "english": "Is this your first visit to Paris?"
+    },
+    {
+      "text": "Bonjour, merci beaucoup !",
+      "clip": "fox-00"
+    },
+    {
+      "text": "Bonjour et merci !",
+      "clip": "fox-01"
+    },
+    {
+      "text": "Salut, merci pour le menu !",
+      "clip": "fox-02"
+    },
+    {
+      "text": "Je suis prêt à commander.",
+      "clip": "fox-03"
+    },
+    {
+      "text": "Je suis prête à commander.",
+      "clip": "fox-04"
+    },
+    {
+      "text": "J'ai fait mon choix, merci.",
+      "clip": "fox-05"
+    },
+    {
+      "text": "Qu'est-ce que vous me conseillez ?",
+      "clip": "fox-06"
+    },
+    {
+      "text": "Qu'est-ce que vous recommandez ?",
+      "clip": "fox-07"
+    },
+    {
+      "text": "Quel est le plat du jour ?",
+      "clip": "fox-08"
+    },
+    {
+      "text": "Je voudrais un croque-monsieur, s'il vous plaît.",
+      "clip": "fox-09"
+    },
+    {
+      "text": "Une salade, s'il vous plaît.",
+      "clip": "fox-10"
+    },
+    {
+      "text": "Je vais prendre un croque-monsieur.",
+      "clip": "fox-11"
+    },
+    {
+      "text": "De l'eau, s'il vous plaît.",
+      "clip": "fox-12"
+    },
+    {
+      "text": "Un café, s'il vous plaît.",
+      "clip": "fox-13"
+    },
+    {
+      "text": "De l'eau plate, s'il vous plaît.",
+      "clip": "fox-14"
+    },
+    {
+      "text": "Plate, s'il vous plaît.",
+      "clip": "fox-15"
+    },
+    {
+      "text": "Gazeuse, s'il vous plaît.",
+      "clip": "fox-16"
+    },
+    {
+      "text": "De l'eau plate, merci.",
+      "clip": "fox-17"
+    },
+    {
+      "text": "Non, de l'eau plate, s'il vous plaît.",
+      "clip": "fox-18"
+    },
+    {
+      "text": "Non, de l'eau gazeuse, s'il vous plaît.",
+      "clip": "fox-19"
+    },
+    {
+      "text": "Pardon, je préfère de l'eau plate.",
+      "clip": "fox-20"
+    },
+    {
+      "text": "Pardon, je préfère de l'eau gazeuse.",
+      "clip": "fox-21"
+    },
+    {
+      "text": "Pas gazeuse, de l'eau plate !",
+      "clip": "fox-22"
+    },
+    {
+      "text": "Pas plate, de l'eau gazeuse !",
+      "clip": "fox-23"
+    },
+    {
+      "text": "Oui, c'est ça. Merci !",
+      "clip": "fox-24"
+    },
+    {
+      "text": "Oui, exactement, merci.",
+      "clip": "fox-25"
+    },
+    {
+      "text": "Pouvez-vous répéter, s'il vous plaît ?",
+      "clip": "fox-26"
+    },
+    {
+      "text": "Oui, c'est ma première fois à Paris !",
+      "clip": "fox-27"
+    },
+    {
+      "text": "J'aime beaucoup ce quartier.",
+      "clip": "fox-28"
+    },
+    {
+      "text": "L'addition, s'il vous plaît.",
+      "clip": "fox-29"
+    },
+    {
+      "text": "Pardon, pouvez-vous reformuler ?",
+      "clip": "fox-30",
+      "english": "Sorry, could you rephrase that?"
+    },
+    {
+      "text": "La salade coûte dix euros, le croque-monsieur douze euros et le café trois euros.",
+      "english": "The salad is ten euros, the toasted sandwich twelve euros, and the coffee three euros.",
+      "clip": "aside-0"
+    },
+    {
+      "text": "Le croque-monsieur contient du jambon et du fromage.",
+      "english": "The toasted sandwich contains ham and cheese.",
+      "clip": "aside-1"
+    }
+  ]
+}

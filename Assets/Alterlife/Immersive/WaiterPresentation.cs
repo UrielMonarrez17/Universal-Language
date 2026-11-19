@@ -23,6 +23,12 @@ namespace Alterlife.Immersive
         void LateUpdate()
         {
             if (!viewer) viewer = Camera.main;
+            if (viewer && actor)
+            {
+                var facing = Vector3.ProjectOnPlane(viewer.transform.position - actor.position, Vector3.up);
+                // The imported barista faces the negative Z axis of the actor wrapper.
+                if (facing.sqrMagnitude > .001f) actor.rotation = Quaternion.LookRotation(-facing);
+            }
             if (viewer && speech)
                 speech.rotation = Quaternion.LookRotation(speech.position - viewer.transform.position, Vector3.up);
         }

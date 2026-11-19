@@ -58,6 +58,7 @@ namespace Alterlife.Immersive
         public void Begin()
         {
             if (voice) voice.ResetConversation();
+            helpWait = 0;
             Stage = RestaurantStage.Welcome;
             Dish = Drink = WaterType = "";
             MenuInspected = false;
@@ -95,6 +96,7 @@ namespace Alterlife.Immersive
 
         void Present()
         {
+            helpWait = 0;
             if (helpCards) helpCards.SetActive(false);
             if (companion) companion.ResetToObserving();
             if (voice) voice.NotifyUserActivity();
@@ -135,12 +137,23 @@ namespace Alterlife.Immersive
             Feedback("Speak naturally in French. Press Y anytime for Fox help.");
         }
 
+        string lastWaiterLine, translatedLine, translatedText;
+        string WaiterSubtitle => lastWaiterLine == translatedLine && !string.IsNullOrEmpty(translatedText)
+            ? translatedText : RestaurantTutor.Translation(lastWaiterLine);
+
+        void SayAside(string text)
+        {
+            lastWaiterLine = text;
+            if (speechText) speechText.text = text;
+            voice?.Speak(text);
+        }
+
         void SetPrompt(string text)
         {
-            CurrentPrompt = text;
+            lastWaiterLine = CurrentPrompt = text;
             if (speechText) speechText.text = text;
             PromptChanged?.Invoke(text);
-            if (voice) voice.Speak(text, Stage < RestaurantStage.Confirmation && lesson != null ? Line.voice : null);
+            if (voice) voice.Speak(text, Stage < RestaurantStage.Confirmation && lesson != null && text == Line.prompt ? Line.voice : null);
         }
 
         public void SubmitTranscript(string transcript)
@@ -154,16 +167,7 @@ namespace Alterlife.Immersive
 
             if (voice) voice.NotifyUserActivity();
 
-            // Check if the player spoke one of the 3 active Fox help phrases aloud.
-            if (companion != null && companion.IsShowingHelp)
-            {
-                int spokenIdx = MatchSpokenFoxOption(transcript);
-                if (spokenIdx >= 0)
-                {
-                    SelectFoxOptionByIndex(spokenIdx, spokenAloud: true);
-                    return;
-                }
-            }
+            if (HandleTutorQuestion(transcript)) return;
 
             if (Stage == RestaurantStage.Practice)
             {
@@ -175,6 +179,16 @@ namespace Alterlife.Immersive
             if (Has(text, "repeter|repetez|lentement") || text.Contains("moins vite")) { Repeat(); return; }
             if (text.Contains("ne sais pas") || text.Contains("ne comprends pas")) { ShowHelp(); return; }
 
+            if (text.Contains("combien") || Has(text, "prix|coute"))
+            {
+                SayAside("La salade coûte dix euros, le croque-monsieur douze euros et le café trois euros.");
+                return;
+            }
+            if (Has(text, "contient|ingredients") || text.Contains("il y a quoi"))
+            {
+                SayAside("Le croque-monsieur contient du jambon et du fromage.");
+                return;
+            }
             Attempts++;
             bool accepted = false;
             RestaurantStage next = Stage + 1;
@@ -227,6 +241,7 @@ namespace Alterlife.Immersive
 
             if (!accepted)
             {
+                SayAside("Pardon, pouvez-vous reformuler ?");
                 Feedback(Stage == RestaurantStage.Confirmation && Challenge
                     ? "Listen carefully: the waiter repeated a different water type. Correct the order."
                     : "Try again: " + Line.hint + " (Press Y for Fox help).");
@@ -253,8 +268,9 @@ namespace Alterlife.Immersive
 
         public void ApplyGeminiTurn(RestaurantVoiceBridge.GeminiWaiterTurn turn, bool usedCardSelection)
         {
-            if (turn == null || !ready) return;
+            if (turn == null || !ready || HandleTutorQuestion(turn.userTranscript)) return;
 
+            translatedLine = turn.npcReplyFrench; translatedText = turn.npcReplyEnglish;
             if (voice) voice.NotifyUserActivity();
 
             // If Gemini recognized that the user read one of the active Fox options aloud, handle celebration & assistance.
@@ -405,17 +421,45 @@ namespace Alterlife.Immersive
             }
         }
 
+        float helpWait;
+        void Update()
+        {
+            if (!ready || Stage >= RestaurantStage.Complete || (companion && companion.IsShowingHelp) ||
+                (voice && voice.speaker && voice.speaker.isPlaying)) return;
+            helpWait += Time.unscaledDeltaTime;
+            if (helpWait >= (voice ? voice.HelpDelay : 8f)) OnProlongedUserPause();
+        }
+
+        bool HandleTutorQuestion(string words)
+        {
+            if (string.IsNullOrWhiteSpace(words) || !RestaurantTutor.IsEnglishQuestion(words) &&
+                !System.Text.RegularExpressions.Regex.IsMatch(Normalize(words), @"(veut dire|signifie|aidez|comment dit|besoin d aide|comprends pas)")) return false;
+            ShowHelp();
+            var meaning = RestaurantTutor.Definition(words);
+            TutorCaption("Waiter: " + WaiterSubtitle +
+                (meaning == null ? "\nTap a phrase to hear it." : "\n" + meaning));
+            return true;
+        }
+
+        void TutorCaption(string message)
+        {
+            Feedback(message);
+            if (companion) companion.SetHelpCaption(message);
+        }
+
         public void OnProlongedUserPause()
         {
             if (!ready || Stage >= RestaurantStage.Complete)
                 return;
 
+            helpWait = 0;
             if (companion != null && !companion.IsShowingHelp)
                 ShowHelp();
         }
 
         public void ToggleFoxHelp()
         {
+            helpWait = 0;
             if (companion != null && companion.IsShowingHelp)
             {
                 companion.ResetToObserving();
@@ -446,45 +490,20 @@ namespace Alterlife.Immersive
             if (answerB && options.Length > 1) answerB.text = FormatOption(options[1]);
             if (answerC && options.Length > 2) answerC.text = FormatOption(options[2]);
 
-            Feedback("Fox Help: say one of the French phrases aloud or select a card with Trigger / Pinch.");
+            TutorCaption("Waiter: " + WaiterSubtitle + "\nTap a phrase to hear it. Then try it yourself.");
         }
 
         static string FormatOption(FoxHelpOption opt) =>
             $"<b><color=#F8FAFC>{opt.french}</color></b>\n<size=68%><color=#94A3B8>{opt.englishDescription}</color></size>";
 
-        int MatchSpokenFoxOption(string transcript)
-        {
-            FoxHelpOption[] options = GetCurrentContextualOptions();
-            string spoken = Normalize(transcript);
-            if (string.IsNullOrWhiteSpace(spoken)) return -1;
-
-            for (int i = 0; i < options.Length; i++)
-            {
-                string target = Normalize(options[i].french);
-                if (string.IsNullOrWhiteSpace(target)) continue;
-                if (spoken == target || spoken.Contains(target) || target.Contains(spoken) && spoken.Length >= 8)
-                    return i;
-            }
-            return -1;
-        }
-
         void SelectFoxOptionByIndex(int idx, bool spokenAloud)
         {
-            FoxHelpOption[] options = GetCurrentContextualOptions();
+            var options = GetCurrentContextualOptions();
             if (idx < 0 || idx >= options.Length) return;
-
             assisted = true;
             string phrase = options[idx].french;
-
-            if (helpCards) helpCards.SetActive(false);
-            if (voice && voice.HasGeminiKey && !Application.isBatchMode)
-            {
-                voice.SubmitTextToGemini(phrase);
-            }
-            else
-            {
-                SubmitTranscript(phrase);
-            }
+            voice?.Speak(phrase);
+            TutorCaption("Try saying: " + phrase + "\n" + options[idx].englishDescription);
         }
 
         public void UseAnswerA() => SelectFoxOptionByIndex(0, false);

@@ -1,17 +1,17 @@
 # Paris restaurant prototype
 
-Updated November 17, 2026. Open this existing project in Unity **6000.5.9f1**. The authored scene is `Assets/Scenes/Paris.unity`; enter through `Assets/Scenes/ImmersiveHub.unity` to test the full flow.
+Updated November 18, 2026. Open this existing project in Unity **6000.5.9f1**. The authored scene is `Assets/Scenes/Paris.unity`; enter through `Assets/Scenes/ImmersiveHub.unity` to test the full flow.
 
 ## Run and interact
 
 1. Grip Earth and sweep horizontally. The direction is corrected; pitch/roll do not tilt the globe. Its France flag faces the headset independently of Earth rotation.
 2. Select France to save French as the language and fade into **BookSelection.unity**, spawning in front of the book. The globe and reading room now occupy separate scenes. WORLD SELECTION returns to the observatory.
 3. Open the book, turn to **The Neighborhood Café**, select it and confirm. This loads Paris; Apartment and Customs are marked COMING SOON and cannot be confirmed in this beta.
-4. In Paris, use physical movement, teleportation and snap turning from the existing XRI rig. Point/select the tabletop HELP, REPEAT and microphone controls. Grip the physical menu to inspect it; release it back onto the table.
-5. Without a voice service, use HELP and select one of the two French response cards. This is recorded as assistance. Dialogue remains visible in French; instructions and feedback are English.
+4. Open the left wrist menu with X or raise the wrist. Point and press with the right controller or pinch with the right hand. Select Back to return one scene.
+5. In Paris, allow microphone access. Wait for the French greeting and LISTENING, then say “Bonjour, merci beaucoup”. Grip the physical menu when asked. Y opens response cards.
 6. After completion, inspect results, REPLAY CONVERSATION or RETURN TO BOOK. Returning also places the player at the book. PRACTICE AGAIN restarts guided conversation offline. KEEP PRACTICING becomes available with the optional configured voice service.
 
-For voice and AI setup see [local voice server](../Tools/RestaurantVoice/README.md). No provider secret is stored in Unity. No French audio clips were supplied, so the offline demo currently has written French dialogue, not spoken audio.
+Quest recognizes guided French answers locally using Vosk. The waiter plays recorded French lines, including the order confirmation. Free conversation requires an online provider. See the [voice bridge](../Tools/RestaurantVoice/README.md).
 
 ## Assessment script
 
@@ -42,21 +42,21 @@ City visual update: the old Bricktown block placement and lounge chairs are pres
 
 ## Validation and remaining work
 
-Latest scene-flow run: **48 Play-mode assertions passed**, including world → book → restaurant → book → world, teleportation to and from clear destinations in both menus, unavailable chapter gating, offline practice restart, retained assessment behavior and supported visible city materials. The earlier four mocked Python voice-contract tests remain unchanged. The batch validator disables the optional desktop simulator in memory because its keyboard UI assumes bindings unavailable in batch mode. The authored simulator configuration is preserved. OpenXR reports no available headset in this environment, as expected.
+Latest scene-flow run: **53 Play-mode assertions passed**, including world → book → restaurant → book → world, teleportation to and from clear destinations in both menus, unavailable chapter gating, offline practice restart, retained assessment behavior and supported visible city materials. The earlier four mocked Python voice-contract tests remain unchanged. The batch validator disables the optional desktop simulator in memory because its keyboard UI assumes bindings unavailable in batch mode. The authored simulator configuration is preserved. OpenXR reports no available headset in this environment, as expected.
 
 Use **Alterlife > Restaurant > Validate Paris prototype** from Edit mode (save your work first; validation opens scenes and enters Play mode). It checks globe yaw, billboard, auto-teleport, one Paris rig, missing script references, menu grab, assessment branches, invalid input, assistance, save progression and WAV encoding. Captures and logs are written to `Artifacts/Paris`.
 
-Desktop Play-mode validation and mocked backend tests are not Quest testing. No APK was built, no physical controller/microphone was exercised, no real voice/AI request was sent and no on-device frame rate was measured. Quest deployment uses the project's Android/OpenXR configuration and Build And Run after installing this Editor's Android Build Support if missing. Start with ImmersiveHub enabled first in Build Settings; connect a developer-mode headset by USB.
+The Quest 2 native decoder was exercised using recorded French audio. Testing spoken answers from a wearer also requires microphone permission and an active headset.
 
 Next: device/controller comfort and performance checks, final lighting/texture optimization, a rigged waitress with walking/menu delivery animations, prerecorded French lines or configured voice service, broader phrase coverage and end-to-end conversational evaluation. The apartment and customs learning gameplay remain outside this restaurant prototype.
 
 
-## Quest 2 offline beta (1.0.1-beta)
+## Quest 2 offline beta (1.0.2-beta)
 
 Use **Alterlife > Quest > Build Quest 2 Beta APK** for the non-development ARM64/IL2CPP APK. It includes only ImmersiveHub, BookSelection and Paris. Output: `Builds/Quest/UniversalLanguage-Quest2-Beta.apk`. Android Build Support, SDK, NDK and OpenJDK are installed for Unity 6000.5.9f1. The local sideload build uses Unity's default debug signing certificate; preserve signing identity for future in-place updates. Store publication is outside this build.
 
 Room movement: physically move inside the configured play area; push either controller stick forward, point at a clear floor destination, then release to teleport. Use sideways right-stick input for snap turns. Select the movement control to enable optional left-stick smooth movement. The standing/seated and recenter controls remain available. The desktop simulator is tagged EditorOnly in both menu scenes so simulated HMD devices are excluded before player startup. The existing head camera retains position-and-rotation tracking and updates before rendering.
 
-Offline interaction: select France, open the book, turn to the restaurant, select and confirm. Grip the menu to inspect it. Use HELP and French response cards to advance each objective. No internet, microphone authorization, speech recognition or AI service is required for these cards. This beta presents written waiter dialogue; it does not assess actual spoken pronunciation or provide an audio listening test. At completion, PRACTICE AGAIN restarts the guided conversation and RETURN TO BOOK returns to the separate book scene.
+In Paris, listen to the waiter and answer aloud after the listening indicator appears. Y opens the help cards. Practice Again repeats the guided assessment.
 
 Device verification evidence is written under `Artifacts/QuestRelease`; build information is under `Builds/Quest/build-summary.txt`. The player emits brief `QUEST_BETA_TRACKING` diagnostics during the first 40 seconds of each scene, reporting XR display state, head position/rotation movement and controller availability. These logs help verify tracking; they do not replace a wearer confirming visual comfort, controller teleportation and the full flow.

@@ -1,0 +1,11 @@
+French speech recognition uses Vosk Android 0.3.47 and vosk-model-small-fr-0.22 from Alpha Cephei, distributed under Apache License 2.0.
+https://github.com/alphacep/vosk-api
+https://alphacephei.com/vosk/models
+Model SHA-256: cabf6180e177eb9b3a9a9d43a437bd5e549f3a7d09525e5d69a3fed787be12ad
+
+The French restaurant recordings were synthesized with Piper, using the UPMC medium fr_FR model, speaker Pierre. The recordings adapt the project's restaurant script and are distributed under CC BY-SA 4.0.
+Model by the Piper voices project, trained using the UPMC Pierre corpus.
+https://huggingface.co/rhasspy/piper-voices/blob/main/fr/fr_FR/upmc/medium/MODEL_CARD
+https://github.com/marytts/upmc-pierre-data
+https://creativecommons.org/licenses/by-sa/4.0/
+English help requests use Alpha Cephei's vosk-model-small-en-us-0.15 (Apache License 2.0). Fox pronunciation examples use the UPMC Jessica voice under the same CC BY-SA 4.0 attribution above.

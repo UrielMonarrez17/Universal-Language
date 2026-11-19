@@ -94,6 +94,7 @@ namespace Alterlife.Immersive
             sb.AppendLine("{");
             sb.AppendLine("  \"userTranscript\": \"exact words the user said in French/English (or empty if unclear audio)\",");
             sb.AppendLine("  \"npcReplyFrench\": \"Lucas's spoken French response (1-2 short natural sentences)\",");
+            sb.AppendLine("  \"npcReplyEnglish\": \"Exact English subtitle for npcReplyFrench\",");
             sb.AppendLine("  \"feedbackEnglish\": \"brief encouraging coaching tip in English for the journal\",");
             sb.AppendLine("  \"advanceObjective\": true/false,");
             sb.AppendLine("  \"detectedDish\": \"salade\" | \"croque-monsieur\" | \"\",");

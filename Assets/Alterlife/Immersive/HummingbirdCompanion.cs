@@ -82,9 +82,11 @@ namespace Alterlife.Immersive
         private Vector3 rescueAnchorPos;
         private Quaternion rescueAnchorRot;
         private bool hasRescueAnchor;
+        private Renderer[] foxRenderers;
 
         private void Awake()
         {
+            foxRenderers = GetComponentsInChildren<Renderer>(true);
             if (headCamera == null && Camera.main != null)
                 headCamera = Camera.main.transform;
 
@@ -183,7 +185,7 @@ namespace Alterlife.Immersive
 
                 case CompanionState.RescueLevel2:
                     Vector3 foxTarget = hasRescueAnchor
-                        ? rescueAnchorPos + (rescueAnchorRot * new Vector3(-0.48f, 0.14f, 0.02f))
+                        ? rescueAnchorPos + (rescueAnchorRot * new Vector3(-.34f,.15f,-.05f))
                         : headCamera.position + (yawRotation * new Vector3(-0.35f, -0.05f, 0.85f));
                     foxTarget.y += Mathf.Sin(Time.time * bobbingSpeed) * (bobbingAmplitude * 0.45f);
                     transform.position = Vector3.Lerp(transform.position, foxTarget, Time.deltaTime * (followDamping * 1.3f));
@@ -194,6 +196,17 @@ namespace Alterlife.Immersive
                     {
                         transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(toUser, Vector3.up), Time.deltaTime * rotationDamping);
                     }
+                    // The imported fox's pivot is offset from its visible geometry.
+                    Bounds bounds = default;
+                    bool found = false;
+                    foreach (var part in foxRenderers)
+                    {
+                        if (!part || !part.enabled || !part.gameObject.activeInHierarchy ||
+                            (!(part is SkinnedMeshRenderer) && !(part is MeshRenderer)) || part.GetComponent<TMP_Text>()) continue;
+                        if (!found) { bounds = part.bounds; found = true; }
+                        else bounds.Encapsulate(part.bounds);
+                    }
+                    if (found) transform.position += foxTarget - bounds.center;
                     break;
 
                 case CompanionState.Celebrating:
@@ -224,7 +237,7 @@ namespace Alterlife.Immersive
 
             if (dialogueCardsRoot != null && dialogueCardsRoot.activeSelf && headCamera != null)
             {
-                if (!hasRescueAnchor)
+                if (!hasRescueAnchor || Vector3.Angle(headCamera.forward, rescueAnchorPos - headCamera.position) > 50f)
                     CaptureRescueAnchor();
 
                 dialogueCardsRoot.transform.position = Vector3.Lerp(
@@ -296,6 +309,11 @@ namespace Alterlife.Immersive
             hasRescueAnchor = false;
             CaptureRescueAnchor();
             SetState(CompanionState.RescueLevel2);
+            if (hasRescueAnchor)
+            {
+                var target = rescueAnchorPos + rescueAnchorRot * new Vector3(-.34f,.15f,-.05f);
+                transform.position = target;
+            }
             PlaySound(chirpHintClip);
         }
 
@@ -314,28 +332,32 @@ namespace Alterlife.Immersive
             label.text = $"<b><color=#F8FAFC>{option.french}</color></b>{desc}";
         }
 
+        public void SetHelpCaption(string message)
+        {
+            var header = dialogueCardsRoot ? dialogueCardsRoot.transform.Find("Fox help header") : null;
+            if (header && header.TryGetComponent<TMP_Text>(out var text))
+            {
+                text.rectTransform.sizeDelta = new Vector2(.9f,.23f);
+                text.text = message;
+            }
+        }
+
         public void SelectCardA()
         {
             var callback = onCardASelected;
-            ResetToObserving();
             callback?.Invoke();
-            Celebrate();
         }
 
         public void SelectCardB()
         {
             var callback = onCardBSelected;
-            ResetToObserving();
             callback?.Invoke();
-            Celebrate();
         }
 
         public void SelectCardC()
         {
             var callback = onCardCSelected;
-            ResetToObserving();
             callback?.Invoke();
-            Celebrate();
         }
 
         public void Celebrate()
