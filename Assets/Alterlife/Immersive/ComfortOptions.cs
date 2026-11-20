@@ -10,6 +10,7 @@ namespace Alterlife.Immersive
     public sealed class ComfortOptions : MonoBehaviour
     {
         const string SeatedPrefKey = "Alterlife.Comfort.Seated";
+        const string SmoothMovePrefKey = "Alterlife.Comfort.SmoothMove";
         public static bool PersistenceEnabled = true;
 
         public ControllerInputActionManager leftController;
@@ -21,24 +22,66 @@ namespace Alterlife.Immersive
         public float seatedHeightOffset = 0.40f;
 
         public bool IsSeatedMode { get; private set; }
+        public bool IsSmoothMovementEnabled =>
+            leftController != null
+                ? leftController.smoothMotionEnabled
+                : (PersistenceEnabled && PlayerPrefs.GetInt(SmoothMovePrefKey, 0) == 1);
+
+        void Awake()
+        {
+            ResolveReferences();
+            ApplySavedMovementMode();
+        }
 
         void Start()
         {
-            if (leftController)
-                leftController.smoothMotionEnabled = false;
-
-            if (xrOrigin == null)
-                xrOrigin = FindAnyObjectByType<XROrigin>();
+            ResolveReferences();
+            ApplySavedMovementMode();
 
             IsSeatedMode = PersistenceEnabled && PlayerPrefs.GetInt(SeatedPrefKey, 0) == 1;
             ApplyPosture(IsSeatedMode);
             Refresh();
         }
 
+        void ResolveReferences()
+        {
+            if (xrOrigin == null)
+                xrOrigin = FindAnyObjectByType<XROrigin>();
+
+            if (leftController == null && xrOrigin != null)
+            {
+                foreach (var c in xrOrigin.GetComponentsInChildren<ControllerInputActionManager>(true))
+                {
+                    if (c != null && c.name.IndexOf("Left", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        leftController = c;
+                        break;
+                    }
+                }
+            }
+        }
+
+        public void ApplySavedMovementMode()
+        {
+            if (leftController == null)
+                return;
+
+            bool smooth = PersistenceEnabled && PlayerPrefs.GetInt(SmoothMovePrefKey, 0) == 1;
+            leftController.smoothMotionEnabled = smooth;
+        }
+
         public void ToggleSmoothMovement()
         {
             if (leftController)
-                leftController.smoothMotionEnabled = !leftController.smoothMotionEnabled;
+            {
+                bool next = !leftController.smoothMotionEnabled;
+                leftController.smoothMotionEnabled = next;
+                if (PersistenceEnabled)
+                {
+                    PlayerPrefs.SetInt(SmoothMovePrefKey, next ? 1 : 0);
+                    PlayerPrefs.Save();
+                }
+            }
             Refresh();
         }
 

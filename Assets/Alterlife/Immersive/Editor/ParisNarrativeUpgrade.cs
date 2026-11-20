@@ -29,12 +29,54 @@ namespace Alterlife.Immersive.Editor
             if (!Application.isBatchMode && SceneManager.GetActiveScene().isDirty)
                 EditorSceneManager.SaveOpenScenes();
 
+            ConfigureNativePlugins();
             UpdateDataAssets();
+            ImmersiveExperienceUpgrade.ApplyAll();
             UpdateParisScene();
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
             Debug.Log("ALTERLIFE_PARIS_NARRATIVE_UPGRADE_APPLIED");
+        }
+
+        static void ConfigureNativePlugins()
+        {
+            string[] androidLibs =
+            {
+                "Assets/Alterlife/Immersive/Paris/Plugins/Android/arm64-v8a/libonnxruntime.so",
+                "Assets/Alterlife/Immersive/Paris/Plugins/Android/arm64-v8a/libsherpa-onnx-c-api.so"
+            };
+
+            foreach (string path in androidLibs)
+            {
+                var importer = AssetImporter.GetAtPath(path) as PluginImporter;
+                if (importer == null) continue;
+                importer.SetCompatibleWithAnyPlatform(false);
+                importer.SetCompatibleWithEditor(false);
+                importer.SetCompatibleWithPlatform(BuildTarget.Android, true);
+                importer.SetPlatformData(BuildTarget.Android, "CPU", "ARM64");
+                importer.SaveAndReimport();
+            }
+
+            string[] winLibs =
+            {
+                "Assets/Alterlife/Immersive/Paris/Plugins/x86_64/onnxruntime.dll",
+                "Assets/Alterlife/Immersive/Paris/Plugins/x86_64/onnxruntime_providers_shared.dll",
+                "Assets/Alterlife/Immersive/Paris/Plugins/x86_64/sherpa-onnx-c-api.dll"
+            };
+
+            foreach (string path in winLibs)
+            {
+                var importer = AssetImporter.GetAtPath(path) as PluginImporter;
+                if (importer == null) continue;
+                importer.SetCompatibleWithAnyPlatform(false);
+                importer.SetCompatibleWithEditor(true);
+                importer.SetEditorData("CPU", "x86_64");
+                importer.SetEditorData("OS", "Windows");
+                importer.SetCompatibleWithPlatform(BuildTarget.StandaloneWindows64, true);
+                importer.SetPlatformData(BuildTarget.StandaloneWindows64, "CPU", "x86_64");
+                importer.SaveAndReimport();
+            }
         }
 
         static void UpdateDataAssets()
@@ -210,9 +252,48 @@ namespace Alterlife.Immersive.Editor
                     foxSo.FindProperty("audioSource").objectReferenceValue = foxAudio;
                     foxSo.FindProperty("hintPanelRoot").objectReferenceValue = hintPanel;
                     foxSo.FindProperty("hintPanelText").objectReferenceValue = hintText;
+                    foxSo.FindProperty("shoulderOffset").vector3Value = new Vector3(0.48f, -0.38f, 0.72f);
                     foxSo.ApplyModifiedPropertiesWithoutUndo();
                     EditorUtility.SetDirty(foxCompanion);
                 }
+            }
+
+            // 4b. Create/Update compact Bottom-Right HUD Mic Status indicator inside XR Camera's field of view
+            var xrOrigin = Object.FindAnyObjectByType<Unity.XR.CoreUtils.XROrigin>(FindObjectsInactive.Include);
+            TMP_Text hudMicLabel = null;
+            Renderer hudMicBackingRenderer = null;
+            if (xrOrigin != null && xrOrigin.Camera != null)
+            {
+                Transform camTf = xrOrigin.Camera.transform;
+                Transform existingHud = camTf.Find("HUD Mic Status");
+                if (existingHud != null)
+                    Object.DestroyImmediate(existingHud.gameObject);
+
+                GameObject hudRoot = new GameObject("HUD Mic Status");
+                hudRoot.transform.SetParent(camTf, false);
+                hudRoot.transform.localPosition = new Vector3(0.23f, -0.165f, 0.56f);
+                hudRoot.transform.localRotation = Quaternion.Euler(6f, 12f, 0f);
+
+                GameObject hudBacking = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                hudBacking.name = "HUD Mic Backing";
+                hudBacking.transform.SetParent(hudRoot.transform, false);
+                hudBacking.transform.localPosition = new Vector3(0f, 0f, 0.004f);
+                hudBacking.transform.localScale = new Vector3(0.145f, 0.036f, 0.003f);
+                Object.DestroyImmediate(hudBacking.GetComponent<Collider>());
+                hudMicBackingRenderer = hudBacking.GetComponent<Renderer>();
+                if (backdropMat != null)
+                    hudMicBackingRenderer.sharedMaterial = backdropMat;
+
+                hudMicLabel = CreateText(
+                    "HUD Mic Label",
+                    hudRoot.transform,
+                    "<color=#6EE7B7><b>● MIC ON</b></color> <size=78%><color=#CBD5E1>· Press B</color></size>",
+                    Vector3.zero,
+                    new Vector2(0.138f, 0.032f),
+                    0.115f,
+                    CrispTextColor,
+                    font);
+                EditorUtility.SetDirty(hudRoot);
             }
 
             // 5. Wire RestaurantEvaluation, RestaurantVoiceBridge, ParisWaiterPersonality
@@ -231,9 +312,13 @@ namespace Alterlife.Immersive.Editor
                 voice.foxSpeaker = foxAudio;
                 voice.npcPersonality = personality;
                 voice.autoListenVad = true;
+                voice.hudMicStatusLabel = hudMicLabel;
+                voice.hudMicStatusBacking = hudMicBackingRenderer;
                 SerializedObject voiceSo = new SerializedObject(voice);
                 voiceSo.FindProperty("geminiChatModel").stringValue = "gemini-3.5-flash-lite";
                 voiceSo.FindProperty("geminiTtsModel").stringValue = "gemini-3.8-flash-lite-tts";
+                voiceSo.FindProperty("hudMicStatusLabel").objectReferenceValue = hudMicLabel;
+                voiceSo.FindProperty("hudMicStatusBacking").objectReferenceValue = hudMicBackingRenderer;
                 voiceSo.ApplyModifiedPropertiesWithoutUndo();
                 EditorUtility.SetDirty(voice);
             }

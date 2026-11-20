@@ -55,6 +55,8 @@ namespace Alterlife.Immersive.Editor
         {
             RestaurantVoiceBridge.DisableGeminiForTests = true;
             RestaurantVoiceBridge.TestTurnHandler = null;
+            ComfortOptions.PersistenceEnabled = true;
+            PlayerPrefs.SetInt("Alterlife.Comfort.SmoothMove", 0);
             started = EditorApplication.timeSinceStartup;
             frame = -1;
             routine = null;
@@ -112,6 +114,14 @@ namespace Alterlife.Immersive.Editor
             var movement = CheckTeleport(new Vector3(1.6f, 0, 3.5f));
             while (movement.MoveNext()) yield return null;
 
+            // Verify Seated/Standing is removed from Wrist Menu & Smooth movement persists across scenes
+            Assert(GameObject.Find("Wrist posture toggle") == null, "Seated/Standing option removed from ImmersiveHub wrist menu");
+            var hubComfort = UnityEngine.Object.FindAnyObjectByType<ComfortOptions>();
+            var hubWrist = UnityEngine.Object.FindAnyObjectByType<WristMenuController>();
+            Assert(hubComfort != null && !hubComfort.IsSmoothMovementEnabled, "Movement starts in Teleport mode");
+            hubWrist.ToggleMovementMode();
+            Assert(hubComfort.IsSmoothMovementEnabled, "Toggling movement enables Smooth mode in ImmersiveHub");
+
             var globe = UnityEngine.Object.FindAnyObjectByType<AnchoredGlobe>();
             var before = globe.transform.rotation;
             globe.enabled = false;
@@ -143,6 +153,9 @@ namespace Alterlife.Immersive.Editor
 
             var wristCheck = CheckOpenWrist();
             while (wristCheck.MoveNext()) yield return null;
+            Assert(GameObject.Find("Wrist posture toggle") == null, "Seated/Standing option removed from BookSelection wrist menu");
+            var bookComfort = UnityEngine.Object.FindAnyObjectByType<ComfortOptions>();
+            Assert(bookComfort != null && bookComfort.IsSmoothMovementEnabled, "Smooth movement mode persisted from ImmersiveHub into BookSelection");
 
             movement = CheckTeleport(new Vector3(1, 0, 7.6f));
             while (movement.MoveNext()) yield return null;
@@ -197,6 +210,34 @@ namespace Alterlife.Immersive.Editor
 
             wristCheck = CheckOpenWrist();
             while (wristCheck.MoveNext()) yield return null;
+            Assert(GameObject.Find("Wrist posture toggle") == null, "Seated/Standing option removed from Paris wrist menu");
+            var parisComfort = UnityEngine.Object.FindAnyObjectByType<ComfortOptions>();
+            Assert(parisComfort != null && parisComfort.IsSmoothMovementEnabled, "Smooth movement mode persisted into Paris scene");
+            // Reset back to teleport after verifying cross-scene persistence
+            UnityEngine.Object.FindAnyObjectByType<WristMenuController>().ToggleMovementMode();
+            Assert(!parisComfort.IsSmoothMovementEnabled, "Toggling movement in Paris returns to Teleport mode");
+
+            // Verify Bottom-Right HUD Mic Status & Right Controller B Mute Toggle
+            Assert(eval.voice.hudMicStatusLabel != null && eval.voice.hudMicStatusBacking != null,
+                "Bottom-right HUD microphone indicator is wired in Paris.unity");
+            Transform hudTf = eval.voice.hudMicStatusLabel.transform.parent;
+            Assert(hudTf != null && hudTf.localPosition.x > 0.15f && hudTf.localPosition.y < -0.10f,
+                "HUD microphone indicator sits in the bottom-right corner of the player's view");
+            Assert(!eval.voice.IsMicrophoneMuted && eval.voice.hudMicStatusLabel.text.Contains("MIC ON"),
+                "Microphone starts unmuted (MIC ON)");
+            eval.voice.ToggleMicrophoneMute();
+            Assert(eval.voice.IsMicrophoneMuted && eval.voice.hudMicStatusLabel.text.Contains("MIC OFF") &&
+                   eval.playerTranscriptText.text.Contains("MUTED"),
+                "Pressing B toggles microphone to MIC OFF and updates HUD & transcript panel");
+            eval.voice.ToggleMicrophoneMute();
+            Assert(!eval.voice.IsMicrophoneMuted && eval.voice.hudMicStatusLabel.text.Contains("MIC ON"),
+                "Pressing B again restores microphone to MIC ON");
+
+            // Verify Fox Companion rests in lower-right periphery during Observing
+            var foxSoCheck = new SerializedObject(eval.companion);
+            Vector3 foxRestOffset = foxSoCheck.FindProperty("shoulderOffset").vector3Value;
+            Assert(foxRestOffset.x >= 0.45f && foxRestOffset.y <= -0.30f,
+                "Fox companion rests in bottom-right periphery out of central view");
 
             SetupPreview();
             Assert(GameObject.Find("Paris cityscape") && GameObject.Find("Cafe terrace detailing"), "Authored city and terrace detailing are present");
@@ -383,7 +424,7 @@ namespace Alterlife.Immersive.Editor
             eval.BeginPractice();
             Assert(eval.Stage == RestaurantStage.Welcome, "RETRY EXAM restarts the exam cleanly when autonomy threshold was not met");
 
-            // 5. Audio encoding + Gemini WAV & raw PCM decoding verification
+            // 5. Audio encoding + Gemini WAV & raw PCM decoding + Local Anti-Noise Gate + Disk TTS Cache + Local Piper TTS
             byte[] wav = RestaurantVoiceBridge.EncodeWav(new float[1600], 1, 16000);
             Assert(wav.Length == 3244 && System.Text.Encoding.ASCII.GetString(wav, 0, 4) == "RIFF",
                 "Microphone WAV encoding has valid PCM header and length");
@@ -395,6 +436,50 @@ namespace Alterlife.Immersive.Editor
             Assert(decodedPcm != null && decodedPcm.samples == 2400 && decodedPcm.frequency == 24000,
                 "Gemini TTS decoder parses raw L16 PCM audio accurately");
             UnityEngine.Object.Destroy(decodedPcm);
+
+            // Local C# Acoustic Anti-Noise Gate: single word ("Oui" ~0.22s voiced vowel) MUST pass, click/rumble/silence MUST be rejected
+            float[] singleWordPcm = new float[3600]; // 0.225s @ 16kHz
+            for (int i = 200; i < 3200; i++)
+            {
+                float t = i / 16000f;
+                singleWordPcm[i] = 0.08f * Mathf.Sin(2f * Mathf.PI * 220f * t) + 0.05f * Mathf.Sin(2f * Mathf.PI * 660f * t);
+            }
+            Assert(RestaurantVoiceBridge.PassesHumanSpeechFilter(singleWordPcm, 16000, 0.004f),
+                "Anti-noise filter allows short single-word human speech (~0.20s 'Oui')");
+
+            float[] clickPcm = new float[3600];
+            for (int i = 500; i < 650; i++) clickPcm[i] = (i % 2 == 0) ? 0.35f : -0.35f;
+            Assert(!RestaurantVoiceBridge.PassesHumanSpeechFilter(clickPcm, 16000, 0.004f),
+                "Anti-noise filter rejects impulsive mic tap / click");
+
+            float[] rumblePcm = new float[3600];
+            for (int i = 0; i < rumblePcm.Length; i++) rumblePcm[i] = 0.05f * Mathf.Sin(2f * Mathf.PI * 35f * (i / 16000f));
+            Assert(!RestaurantVoiceBridge.PassesHumanSpeechFilter(rumblePcm, 16000, 0.004f),
+                "Anti-noise filter rejects low-frequency breath/wind rumble");
+
+            // Persistent Disk TTS Cache verification (0-latency hash + disk reload)
+            string testPhrase = "Bonjour ! Bienvenue au Café de Paris.";
+            var cachedWriteClip = eval.voice.CachePcmClipToMemoryAndDisk("gemini_Puck_fr", testPhrase, singleWordPcm, 16000, "TestDiskCache");
+            Assert(cachedWriteClip != null && eval.voice.DiskCacheEntryCount > 0, "TTS clip indexed and saved to persistent disk cache");
+            Assert(eval.voice.TryLoadCachedClip("gemini_Puck_fr", testPhrase, out var diskLoadedClip, allowRam: false) &&
+                   diskLoadedClip != null && diskLoadedClip.samples == singleWordPcm.Length,
+                "Persistent disk TTS cache reloads saved phrase audio from disk without calling Gemini API");
+
+            // Local Piper TTS (fr_FR-siwis-medium + en_US-amy-low) verification
+            using (var piper = new PiperLocalTts())
+            {
+                var prep = piper.Prepare();
+                while (prep.MoveNext()) yield return null;
+                Assert(piper.Ready, "Local Piper TTS initialized (fr_FR-siwis-medium + en_US-amy-low)");
+                var frTask = piper.SynthesizeAsync("Bonjour, merci beaucoup !", isFrench: true);
+                while (!frTask.IsCompleted) yield return null;
+                Assert(!frTask.IsFaulted && frTask.Result.samples != null && frTask.Result.samples.Length > 2000,
+                    "Local Piper fr_FR-siwis synthesizes French phrase audio offline");
+                var enTask = piper.SynthesizeAsync("Try greeting Lucas politely in French.", isFrench: false);
+                while (!enTask.IsCompleted) yield return null;
+                Assert(!enTask.IsFaulted && enTask.Result.samples != null && enTask.Result.samples.Length > 2000,
+                    "Local Piper en_US-amy synthesizes English tutor explanation offline");
+            }
 
             // 6. Return navigation: Paris -> BookSelection -> ImmersiveHub
             eval.ReturnToBook();

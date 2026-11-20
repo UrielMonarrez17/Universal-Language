@@ -126,6 +126,14 @@ namespace Alterlife.Immersive
 
             if (restartButtonObject != null)
                 restartButtonObject.SetActive(isParis);
+
+            // Ensure legacy posture toggle button is permanently hidden if still present in hierarchy
+            if (seatedStandingStatusText != null && seatedStandingStatusText.transform.parent != null)
+            {
+                Transform btn = seatedStandingStatusText.transform.parent;
+                if (btn.name.IndexOf("posture", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                    btn.gameObject.SetActive(false);
+            }
         }
 
         private void LateUpdate()
@@ -212,7 +220,11 @@ namespace Alterlife.Immersive
                 return;
 
             isVisible = visible;
-            if (visible) visibleSince = Time.unscaledTime;
+            if (visible)
+            {
+                visibleSince = Time.unscaledTime;
+                RefreshLabels();
+            }
 
             // Keep GameObjects active in hierarchy so scene queries/validations continue to find controls cleanly.
             for (int i = 0; i < cachedRenderers.Count; i++)

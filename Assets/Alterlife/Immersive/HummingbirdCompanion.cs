@@ -32,8 +32,8 @@ namespace Alterlife.Immersive
         [Header("Target Tracking (VR Comfort)")]
         [Tooltip("The main XR Camera (head) to anchor relative comfort positioning.")]
         [SerializeField] private Transform headCamera;
-        [Tooltip("Local offset relative to head: X=right shoulder, Y=height, Z=forward distance.")]
-        [SerializeField] private Vector3 shoulderOffset = new Vector3(0.42f, -0.14f, 0.58f);
+        [Tooltip("Local offset relative to head in Observing state: lower-right periphery out of central view.")]
+        [SerializeField] private Vector3 shoulderOffset = new Vector3(0.48f, -0.38f, 0.72f);
         [SerializeField] private float followDamping = 3.5f;
         [SerializeField] private float rotationDamping = 4.0f;
         [SerializeField] private float bobbingSpeed = 2.5f;
@@ -191,12 +191,12 @@ namespace Alterlife.Immersive
                     }
                     else
                     {
-                        PositionFoxBesidePanel(yawRotation, new Vector3(-0.36f, 0.08f, -0.04f));
+                        PositionFoxBesidePanel(yawRotation, new Vector3(-0.64f, 0.58f, -0.04f));
                     }
                     break;
 
                 case CompanionState.RescueLevel2:
-                    PositionFoxBesidePanel(yawRotation, new Vector3(-0.34f, 0.15f, -0.05f));
+                    PositionFoxBesidePanel(yawRotation, new Vector3(-0.64f, 0.15f, -0.05f));
                     break;
 
                 case CompanionState.Celebrating:

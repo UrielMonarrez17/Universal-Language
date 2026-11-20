@@ -554,7 +554,7 @@ namespace Alterlife.Immersive.Editor
             GameObject panelRoot = new GameObject("Wrist Menu Panel");
             panelRoot.transform.SetParent(wristRoot.transform, false);
 
-            float panelHeight = isParis ? 0.24f : (isBook ? 0.16f : 0.115f);
+            float panelHeight = isParis ? 0.195f : (isBook ? 0.115f : 0.075f);
             GameObject backdrop = GameObject.CreatePrimitive(PrimitiveType.Cube);
             backdrop.name = "Wrist backdrop";
             backdrop.transform.SetParent(panelRoot.transform, false);
@@ -572,11 +572,6 @@ namespace Alterlife.Immersive.Editor
             PhysicalControl moveBtn = CreateMinimalistButton("Wrist movement toggle", panelRoot.transform,
                 new Vector3(0f, y, -0.004f), new Vector3(0.175f, 0.034f, 0.007f), "MOVE: TELEPORT",
                 wrist.ToggleMovementMode, panelMat, font, interactionManager, 0.013f);
-            y -= step;
-
-            PhysicalControl postureBtn = CreateMinimalistButton("Wrist posture toggle", panelRoot.transform,
-                new Vector3(0f, y, -0.004f), new Vector3(0.175f, 0.034f, 0.007f), "POSTURE: STANDING",
-                wrist.ToggleSeatedStandingMode, panelMat, font, interactionManager, 0.013f);
             y -= step;
 
             string returnName = isBook ? "Return to world selection" : (isParis ? "Return to experience book" : "Wrist back button");
@@ -618,7 +613,7 @@ namespace Alterlife.Immersive.Editor
             so.FindProperty("restaurantEvaluation").objectReferenceValue = eval;
             so.FindProperty("companion").objectReferenceValue = companion;
             so.FindProperty("movementStatusText").objectReferenceValue = moveBtn.GetComponentInChildren<TMP_Text>(true);
-            so.FindProperty("seatedStandingStatusText").objectReferenceValue = postureBtn.GetComponentInChildren<TMP_Text>(true);
+            so.FindProperty("seatedStandingStatusText").objectReferenceValue = null;
             so.FindProperty("returnButtonObject").objectReferenceValue = backBtn.gameObject;
             so.FindProperty("returnButtonText").objectReferenceValue = backBtn.GetComponentInChildren<TMP_Text>(true);
             if (foxBtn != null) so.FindProperty("foxHelpButtonObject").objectReferenceValue = foxBtn.gameObject;

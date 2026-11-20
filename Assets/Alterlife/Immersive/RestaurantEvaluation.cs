@@ -211,6 +211,33 @@ namespace Alterlife.Immersive
                 playerTranscriptText.text = "<size=72%><color=#FDE68A>PROCESSING...</color></size>\n<color=#CBD5E1>...</color>";
         }
 
+        public void NotifyNoiseFiltered()
+        {
+            if (playerTranscriptText != null && Stage != RestaurantStage.Complete)
+            {
+                string prev = string.IsNullOrWhiteSpace(LastPlayerTranscript)
+                    ? "Speak naturally in French..."
+                    : $"« {LastPlayerTranscript} »";
+                playerTranscriptText.text = $"<size=72%><color=#94A3B8>YOU SAID (FR)</color></size>\n<color=#CBD5E1>{prev}</color>";
+            }
+        }
+
+        public void NotifyMicrophoneMuted(bool muted)
+        {
+            if (Stage == RestaurantStage.Complete) return;
+            if (muted)
+            {
+                if (playerTranscriptText != null)
+                    playerTranscriptText.text = "<size=72%><color=#FCA5A5>MICROPHONE MUTED</color></size>\n<color=#CBD5E1>Press B on right controller to unmute</color>";
+                Feedback("Microphone muted (any active capture was cancelled). Press B on right controller to unmute.");
+            }
+            else
+            {
+                SetPlayerTranscriptPlaceholder();
+                Feedback("Microphone active. Speak naturally in French or press Y for Fox help.");
+            }
+        }
+
         void SetPlayerTranscriptPlaceholder()
         {
             if (playerTranscriptText != null)

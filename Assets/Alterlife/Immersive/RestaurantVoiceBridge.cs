@@ -3,19 +3,27 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Networking;
+using UnityEngine.XR;
 
 namespace Alterlife.Immersive
 {
     /// <summary>
-    /// Online Google AI Studio (Gemini) multimodal voice & dual-speaker spatial TTS bridge for Le Café de Paris.
-    /// Captures natural speech via continuous Quest/PC microphone VAD, sends audio + full non-linear rubric state
-    /// to Gemini with strict structured JSON schema output, and synthesizes independent spatial voices for
-    /// Lucas Moreau (waiter, French) and the Fox Tutor (assistant, English + French pronunciation modeling).
+    /// Hybrid AI Voice & Audio Bridge for Le Café de Paris:
+    /// - Waiter (Lucas Moreau): Gemini Multimodal Audio-In + Gemini TTS ('Puck') backed by a 0-latency
+    ///   RAM + Persistent Disk TTS Cache (Application.persistentDataPath/TtsCache).
+    /// - Fox Companion Tutor: 100% On-Device Piper Neural TTS via Sherpa-ONNX (fr_FR-siwis-medium for French
+    ///   pronunciation cards + en_US-amy-low for English tutor answers) — 0 API calls.
+    /// - Local C# Acoustic Human-Speech Filter: allows short single-word replies ('Oui', 'Non', 'Café')
+    ///   while rejecting clicks, bumps, breaths, and ambient noise before calling Gemini.
+    /// - Right Controller B Button: instant Mic Mute/Unmute toggle (cancelling any mid-sentence capture)
+    ///   with a compact bottom-right HUD indicator in the player's field of view.
     /// </summary>
     public sealed class RestaurantVoiceBridge : MonoBehaviour
     {
@@ -26,15 +34,21 @@ namespace Alterlife.Immersive
         [SerializeField] private string geminiTtsModel = "gemini-3.8-flash-lite-tts";
 
         static readonly string[] ChatFallbackModels = { "gemini-3.6-flash", "gemini-3.8-flash" };
-        static readonly string[] TtsFallbackModels = { "gemini-3.8-flash-tts", "gemini-2.5-flash-preview-tts" };
+        static readonly string[] TtsFallbackModels = { "gemini-3.8-flash-tts", "gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview", "gemini-2.5-pro-preview-tts" };
 
-        [Header("Continuous Voice Activity Detection (VAD)")]
+        [Header("Continuous Voice Activity Detection (VAD) & Anti-Noise Gate")]
         public bool autoListenVad = true;
         [SerializeField] private float vadStartRms = 0.015f;
         [SerializeField] private float vadStopRms = 0.009f;
-        [SerializeField] private float minSpeechDuration = 0.14f;
-        [SerializeField] private float endSilenceDuration = 1.35f;
+        [Tooltip("Short enough (~0.12s) so single-syllable French words ('Oui', 'Non', 'Eau', 'Thé') always trigger.")]
+        [SerializeField] private float minSpeechDuration = 0.12f;
+        [SerializeField] private float endSilenceDuration = 1.25f;
         [SerializeField] private float maxUtteranceSeconds = 14.0f;
+
+        [Header("Right Controller B Button Mute & HUD")]
+        [SerializeField] private bool enableRightBButtonMute = true;
+        public TMP_Text hudMicStatusLabel;
+        public Renderer hudMicStatusBacking;
 
         [Header("Scene References")]
         public RestaurantEvaluation evaluation;
@@ -44,7 +58,7 @@ namespace Alterlife.Immersive
         public AudioSource foxSpeaker;
         public TMP_Text microphoneLabel;
 
-        // Legacy serialized field kept empty/unused for serialization stability with existing scene YAML
+        // Legacy serialized field kept for scene YAML compatibility
         [HideInInspector] public string serviceUrl;
 
         /// <summary>Disables live Gemini HTTP calls during automated Editor tests.</summary>
@@ -58,18 +72,27 @@ namespace Alterlife.Immersive
         public bool IsAiReady => HasGeminiKey || TestTurnHandler != null;
         public bool IsRecording { get; private set; }
         public bool IsBusy { get; private set; }
+        public bool IsMicrophoneMuted { get; private set; }
+        public int FilteredNoiseCount { get; private set; }
+        public int DiskCacheHitCount { get; private set; }
+        public int DiskCacheEntryCount => diskCacheIndex.Count;
+        public bool IsPiperReady => piperTts != null && piperTts.Ready;
         public bool IsAnyActorSpeaking =>
             isSynthesizingSpeech ||
             (speaker != null && speaker.isPlaying) ||
             (foxSpeaker != null && foxSpeaker.isPlaying);
         public bool IsWaiterSpeaking => speaker != null && speaker.isPlaying;
-        public bool IsPlayerSpeaking => isCapturingUtterance;
+        public bool IsPlayerSpeaking => isCapturingUtterance && !IsMicrophoneMuted;
         public bool IsThinking => IsBusy || isSynthesizingSpeech;
         public string LastTranscript { get; private set; }
 
         const int SampleRate = 16000;
         const int RingBufferSeconds = 20;
-        const int MaxCachedTtsClips = 48;
+        const int MaxCachedTtsClips = 64;
+        const string DiskCacheFolderName = "TtsCache";
+
+        static readonly Color HudMicOnColor = new Color(0.06f, 0.14f, 0.20f, 0.82f);
+        static readonly Color HudMicMutedColor = new Color(0.32f, 0.08f, 0.10f, 0.88f);
 
         AudioClip micRingClip;
         string device;
@@ -79,21 +102,28 @@ namespace Alterlife.Immersive
         float speechStartAccum;
         float silenceEndAccum;
         float utteranceLengthSeconds;
+        float ambientNoiseFloor = 0.004f;
         float nextMicAttempt;
         bool micPermissionDenied;
         bool micBootstrapped;
         bool wasAnyActorSpeaking;
         bool isSynthesizingSpeech;
+        bool wasRightBPressed;
         string cachedResourceKey;
+        string diskCacheDir;
+        bool diskCacheInitialized;
 
         Coroutine speechRoutine;
         UnityWebRequest speechRequest;
         UnityWebRequest operationRequest;
+        PiperLocalTts piperTts;
+        MaterialPropertyBlock hudPropBlock;
 
         readonly List<HistoryEntry> history = new List<HistoryEntry>();
         readonly float[] sampleScratch = new float[SampleRate * 2];
-        readonly Dictionary<string, AudioClip> ttsCache = new Dictionary<string, AudioClip>();
+        readonly Dictionary<string, AudioClip> ttsCache = new Dictionary<string, AudioClip>(StringComparer.OrdinalIgnoreCase);
         readonly Queue<string> ttsCacheOrder = new Queue<string>();
+        readonly HashSet<string> diskCacheIndex = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         struct HistoryEntry
         {
@@ -174,6 +204,169 @@ namespace Alterlife.Immersive
             "]" +
             "}";
 
+        void Awake()
+        {
+            InitializeDiskCacheIndex();
+            RefreshHudMicVisual();
+        }
+
+        void Start()
+        {
+            if (npcPersonality == null)
+                npcPersonality = FindAnyObjectByType<NPCPersonality>();
+            ResolveFoxSpeaker();
+            InitializeDiskCacheIndex();
+            RefreshHudMicVisual();
+            EnsurePiperStarted();
+        }
+
+        void EnsurePiperStarted()
+        {
+            if (piperTts == null)
+                piperTts = new PiperLocalTts();
+            if (!piperTts.Ready && !piperTts.IsInitializing && isActiveAndEnabled && gameObject.activeInHierarchy)
+                StartCoroutine(piperTts.Prepare());
+        }
+
+        /// <summary>
+        /// Indexes existing cached .wav files into an in-memory HashSet once at startup so cache checks take &lt; 0.02 ms.
+        /// </summary>
+        public void InitializeDiskCacheIndex()
+        {
+            if (diskCacheInitialized && !string.IsNullOrEmpty(diskCacheDir))
+                return;
+
+            try
+            {
+                diskCacheDir = Path.Combine(Application.persistentDataPath, DiskCacheFolderName);
+                Directory.CreateDirectory(diskCacheDir);
+                diskCacheIndex.Clear();
+                foreach (string file in Directory.GetFiles(diskCacheDir, "*.wav"))
+                {
+                    string key = Path.GetFileNameWithoutExtension(file);
+                    if (!string.IsNullOrWhiteSpace(key))
+                        diskCacheIndex.Add(key);
+                }
+                diskCacheInitialized = true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[ParisVoice] Could not initialize disk TTS cache directory: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Computes a deterministic 24-hex SHA-256 cache key for (voiceTag + normalized phrase) in &lt; 0.02 ms.
+        /// </summary>
+        public static string ComputeTtsCacheHash(string voiceTag, string text)
+        {
+            string normalized = Regex.Replace((text ?? "").Trim().ToLowerInvariant(), @"\s+", " ");
+            string raw = $"{(voiceTag ?? "default").Trim().ToLowerInvariant()}|{normalized}";
+            using (var sha = SHA256.Create())
+            {
+                byte[] bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(raw));
+                var sb = new StringBuilder(24);
+                for (int i = 0; i < 12; i++)
+                    sb.Append(bytes[i].ToString("x2", CultureInfo.InvariantCulture));
+                return sb.ToString();
+            }
+        }
+
+        /// <summary>
+        /// Stores raw float PCM samples into both the in-memory RAM cache and persistent disk cache (.wav).
+        /// </summary>
+        public AudioClip CachePcmClipToMemoryAndDisk(string voiceTag, string text, float[] samples, int sampleRate, string clipName = "CachedVoice")
+        {
+            if (samples == null || samples.Length == 0 || sampleRate <= 0)
+                return null;
+
+            InitializeDiskCacheIndex();
+            string hash = ComputeTtsCacheHash(voiceTag, text);
+
+            var clip = AudioClip.Create(clipName, samples.Length, 1, sampleRate, false);
+            clip.SetData(samples, 0);
+            CacheTtsClipInRam(hash, clip);
+
+            byte[] wavBytes = EncodeWav(samples, 1, sampleRate);
+            SaveWavToDiskCache(hash, wavBytes, synchronous: true);
+            return clip;
+        }
+
+        void SaveWavToDiskCache(string hash, byte[] wavBytes, bool synchronous = false)
+        {
+            if (string.IsNullOrWhiteSpace(hash) || wavBytes == null || wavBytes.Length < 44)
+                return;
+
+            InitializeDiskCacheIndex();
+            if (string.IsNullOrEmpty(diskCacheDir))
+                return;
+
+            string path = Path.Combine(diskCacheDir, hash + ".wav");
+            diskCacheIndex.Add(hash);
+
+            if (synchronous)
+            {
+                try { File.WriteAllBytes(path, wavBytes); }
+                catch (Exception ex) { Debug.LogWarning("[ParisVoice] Disk cache write failed: " + ex.Message); }
+                return;
+            }
+
+            string targetPath = path;
+            byte[] dataCopy = wavBytes;
+            Task.Run(() =>
+            {
+                try
+                {
+                    string tmp = targetPath + ".tmp";
+                    File.WriteAllBytes(tmp, dataCopy);
+                    if (File.Exists(targetPath)) File.Delete(targetPath);
+                    File.Move(tmp, targetPath);
+                }
+                catch { }
+            });
+        }
+
+        public bool TryLoadCachedClip(string voiceTag, string text, out AudioClip clip, bool allowRam = true)
+        {
+            clip = null;
+            InitializeDiskCacheIndex();
+            string hash = ComputeTtsCacheHash(voiceTag, text);
+
+            if (allowRam && ttsCache.TryGetValue(hash, out AudioClip memClip) && memClip != null)
+            {
+                clip = memClip;
+                return true;
+            }
+
+            if (!diskCacheIndex.Contains(hash) || string.IsNullOrEmpty(diskCacheDir))
+                return false;
+
+            string path = Path.Combine(diskCacheDir, hash + ".wav");
+            if (!File.Exists(path))
+            {
+                diskCacheIndex.Remove(hash);
+                return false;
+            }
+
+            try
+            {
+                byte[] wavBytes = File.ReadAllBytes(path);
+                clip = DecodeGeminiAudio(wavBytes, "audio/wav", $"DiskCache_{hash}");
+                if (clip != null)
+                {
+                    DiskCacheHitCount++;
+                    CacheTtsClipInRam(hash, clip);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[ParisVoice] Failed reading cached WAV: " + ex.Message);
+            }
+
+            return false;
+        }
+
         string ResolveGeminiKey()
         {
             if (!string.IsNullOrWhiteSpace(geminiApiKeyOverride))
@@ -187,13 +380,6 @@ namespace Alterlife.Immersive
             return cachedResourceKey;
         }
 
-        void Start()
-        {
-            if (npcPersonality == null)
-                npcPersonality = FindAnyObjectByType<NPCPersonality>();
-            ResolveFoxSpeaker();
-        }
-
         void ResolveFoxSpeaker()
         {
             if (foxSpeaker == null && evaluation != null && evaluation.companion != null)
@@ -205,6 +391,174 @@ namespace Alterlife.Immersive
             if (!string.IsNullOrWhiteSpace(openingFrench))
                 RecordHistory("Lucas (waiter)", openingFrench);
         }
+
+        // =====================================================================
+        // Right Controller B Button Mute / Unmute + Bottom-Right HUD
+        // =====================================================================
+
+        void PollRightControllerBButton()
+        {
+            if (!enableRightBButtonMute)
+                return;
+
+            InputDevice rightDevice = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
+            if (!rightDevice.isValid)
+            {
+                wasRightBPressed = false;
+                return;
+            }
+
+            bool bPressed = rightDevice.TryGetFeatureValue(CommonUsages.secondaryButton, out bool pressed) && pressed;
+            if (bPressed && !wasRightBPressed)
+            {
+                ToggleMicrophoneMute();
+            }
+            wasRightBPressed = bPressed;
+        }
+
+        public void ToggleMicrophoneMute()
+        {
+            SetMicrophoneMuted(!IsMicrophoneMuted);
+        }
+
+        public void SetMicrophoneMuted(bool muted)
+        {
+            IsMicrophoneMuted = muted;
+
+            if (IsMicrophoneMuted)
+            {
+                // Immediately cancel & discard any in-progress speech capture without sending to Gemini
+                if (isCapturingUtterance)
+                    ResetVadCapture();
+
+                SetLabel("🔇 MIC OFF (PRESS B)");
+                evaluation?.NotifyMicrophoneMuted(true);
+            }
+            else
+            {
+                ResetVadCapture();
+                SetLabel(HasGeminiKey ? "● LISTENING (FR)" : "NO GEMINI API KEY");
+                evaluation?.NotifyMicrophoneMuted(false);
+            }
+
+            RefreshHudMicVisual();
+        }
+
+        void RefreshHudMicVisual()
+        {
+            if (hudMicStatusLabel != null)
+            {
+                hudMicStatusLabel.text = IsMicrophoneMuted
+                    ? "<color=#FCA5A5><b>MIC OFF</b></color> <size=78%><color=#E2E8F0>· Press B</color></size>"
+                    : "<color=#6EE7B7><b>● MIC ON</b></color> <size=78%><color=#CBD5E1>· Press B</color></size>";
+            }
+
+            if (hudMicStatusBacking != null)
+            {
+                if (hudPropBlock == null)
+                    hudPropBlock = new MaterialPropertyBlock();
+                Color c = IsMicrophoneMuted ? HudMicMutedColor : HudMicOnColor;
+                hudMicStatusBacking.GetPropertyBlock(hudPropBlock);
+                hudPropBlock.SetColor("_BaseColor", c);
+                hudPropBlock.SetColor("_Color", c);
+                hudMicStatusBacking.SetPropertyBlock(hudPropBlock);
+            }
+        }
+
+        // =====================================================================
+        // Local Acoustic Anti-Noise Human Voice Gate (Allows Single Words!)
+        // =====================================================================
+
+        /// <summary>
+        /// Evaluates a captured 16 kHz mono PCM buffer in &lt; 0.5 ms of pure C#.
+        /// Allows short 1-syllable French replies ("Oui", "Non", "Eau", "Thé", "Plate" &gt;= ~0.12s voiced)
+        /// while filtering out clicks, mic taps, coughs, breaths, and steady background noise.
+        /// </summary>
+        public static bool PassesHumanSpeechFilter(float[] pcm, int sampleRate, float ambientFloor = 0.004f)
+        {
+            if (pcm == null || sampleRate <= 0)
+                return false;
+
+            int frameLen = Mathf.Max(64, sampleRate / 50); // 20 ms frames (320 samples @ 16 kHz)
+            int totalFrames = pcm.Length / frameLen;
+            if (totalFrames < 5)
+                return false;
+
+            float clampedFloor = Mathf.Clamp(ambientFloor, 0.002f, 0.015f);
+            float voicedRmsThreshold = Mathf.Max(0.0105f, clampedFloor * 1.85f);
+
+            int voicedFrames = 0;
+            int longestContiguousVoiced = 0;
+            int currentContiguous = 0;
+            float totalVoicedEnergy = 0f;
+            float maxFrameEnergy = 0f;
+            float maxSampleAbs = 0f;
+            float zcrSum = 0f;
+
+            for (int f = 0; f < totalFrames; f++)
+            {
+                int offset = f * frameLen;
+                float sumSq = 0f;
+                int zeroCrossings = 0;
+                float prev = pcm[offset];
+
+                for (int i = 0; i < frameLen; i++)
+                {
+                    float s = pcm[offset + i];
+                    float abs = s >= 0f ? s : -s;
+                    if (abs > maxSampleAbs) maxSampleAbs = abs;
+                    sumSq += s * s;
+
+                    if ((s >= 0.004f && prev < -0.004f) || (s < -0.004f && prev >= 0.004f))
+                        zeroCrossings++;
+                    prev = s;
+                }
+
+                float frameRms = Mathf.Sqrt(sumSq / frameLen);
+                if (frameRms >= voicedRmsThreshold)
+                {
+                    voicedFrames++;
+                    currentContiguous++;
+                    if (currentContiguous > longestContiguousVoiced)
+                        longestContiguousVoiced = currentContiguous;
+
+                    totalVoicedEnergy += sumSq;
+                    if (sumSq > maxFrameEnergy)
+                        maxFrameEnergy = sumSq;
+
+                    zcrSum += (float)zeroCrossings / frameLen;
+                }
+                else
+                {
+                    currentContiguous = 0;
+                }
+            }
+
+            // 1. Minimum peak & active duration check:
+            // At least 5 voiced frames (100 ms) and at least 4 contiguous voiced frames (80 ms)
+            // so single-syllable words ("Oui", "Non", "Thé") pass, while <80 ms clicks/ticks fail.
+            if (maxSampleAbs < 0.022f || voicedFrames < 5 || longestContiguousVoiced < 4 || totalVoicedEnergy <= 0f)
+                return false;
+
+            // 2. Impulsive transient rejection (mic bump / table knock / click):
+            // If > 62% of the entire clip's voiced energy is concentrated in a single 20 ms frame, it is an impulse.
+            float singleFrameEnergyRatio = maxFrameEnergy / totalVoicedEnergy;
+            if (singleFrameEnergyRatio > 0.62f)
+                return false;
+
+            // 3. Human vocal Zero-Crossing Rate (ZCR) window:
+            // Human voiced speech + fricatives @ 16 kHz averages between 0.015 (~120 Hz) and 0.42 (~3360 Hz).
+            // Pure wind/handling rumble (< 0.014) or pure high-frequency hiss (> 0.43) is rejected.
+            float meanVoicedZcr = zcrSum / voicedFrames;
+            if (meanVoicedZcr < 0.014f || meanVoicedZcr > 0.43f)
+                return false;
+
+            return true;
+        }
+
+        // =====================================================================
+        // Continuous Microphone Ring & VAD Loop
+        // =====================================================================
 
         IEnumerator EnsureMicrophoneRingRunning()
         {
@@ -266,17 +620,20 @@ namespace Alterlife.Immersive
             Debug.Log("[ParisVoice] Continuous Gemini VAD started at " + micRingClip.frequency + " Hz.");
             lastReadSamplePos = 0;
             IsRecording = true;
-            SetLabel("● LISTENING (FR)");
+            SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "● LISTENING (FR)");
+            RefreshHudMicVisual();
         }
 
         void Update()
         {
+            PollRightControllerBButton();
+
             if (Application.isBatchMode || evaluation == null)
                 return;
 
             if (!HasGeminiKey)
             {
-                SetLabel("NO GEMINI API KEY");
+                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "NO GEMINI API KEY");
                 return;
             }
 
@@ -287,6 +644,12 @@ namespace Alterlife.Immersive
             if (wasAnyActorSpeaking && !anyTalking)
                 ResetVadCapture();
             wasAnyActorSpeaking = anyTalking;
+
+            if (IsMicrophoneMuted)
+            {
+                SetLabel("🔇 MIC OFF (PRESS B)");
+                return;
+            }
 
             if (IsBusy || anyTalking || evaluation.Stage == RestaurantStage.Complete)
             {
@@ -344,16 +707,18 @@ namespace Alterlife.Immersive
             float rms = Mathf.Sqrt(sumSq / readCount);
             float dt = (float)readCount / SampleRate;
 
+            float dynamicStartThreshold = Mathf.Max(vadStartRms, ambientNoiseFloor * 2.15f);
+
             if (!isCapturingUtterance)
             {
                 SetLabel("● LISTENING (FR)");
-                if (rms >= vadStartRms)
+                if (rms >= dynamicStartThreshold)
                 {
                     speechStartAccum += dt;
                     if (speechStartAccum >= minSpeechDuration)
                     {
                         isCapturingUtterance = true;
-                        int preRollSamples = Mathf.RoundToInt(0.45f * SampleRate);
+                        int preRollSamples = Mathf.RoundToInt(0.42f * SampleRate);
                         utteranceStartSample = (currentPos - readCount - preRollSamples + totalSamples) % totalSamples;
                         utteranceLengthSeconds = speechStartAccum;
                         silenceEndAccum = 0f;
@@ -364,6 +729,7 @@ namespace Alterlife.Immersive
                 else
                 {
                     speechStartAccum = 0f;
+                    ambientNoiseFloor = Mathf.Clamp(Mathf.Lerp(ambientNoiseFloor, rms, 0.04f), 0.002f, 0.012f);
                 }
             }
             else
@@ -384,9 +750,19 @@ namespace Alterlife.Immersive
 
                     var pcm = new float[captureLen];
                     ReadRingSlice(utteranceStartSample, captureLen, pcm);
-                    byte[] wav = EncodeWav(pcm, micRingClip.channels, micRingClip.frequency);
-
                     ResetVadCapture();
+
+                    // Run local C# acoustic human-voice filter BEFORE spending a Gemini API call
+                    if (!PassesHumanSpeechFilter(pcm, micRingClip.frequency, ambientNoiseFloor))
+                    {
+                        FilteredNoiseCount++;
+                        Debug.Log("[ParisVoice] Filtered ambient noise/transient — saved 1 Gemini API call.");
+                        SetLabel("● LISTENING (FR)");
+                        evaluation?.NotifyNoiseFiltered();
+                        return;
+                    }
+
+                    byte[] wav = EncodeWav(pcm, micRingClip.channels, micRingClip.frequency);
                     evaluation?.NotifyPlayerThinking();
                     StartCoroutine(SendPayloadToGemini(wav, null));
                 }
@@ -416,6 +792,11 @@ namespace Alterlife.Immersive
         public void ToggleRecording()
         {
             if (IsBusy) return;
+            if (IsMicrophoneMuted)
+            {
+                SetMicrophoneMuted(false);
+                return;
+            }
             if (!HasGeminiKey)
             {
                 SetLabel("NO GEMINI API KEY");
@@ -482,7 +863,7 @@ namespace Alterlife.Immersive
 
             string historySummary = BuildHistoryText();
             string userInstruction = wavBytes != null
-                ? "Listen carefully to the player's audio clip. Transcribe accurately what they actually said (French or English). Decide speakerMode ('waiter' for French conversation with Lucas, 'fox_tutor' for English help/translation/vocabulary questions or purely English replies), evaluate any newly fulfilled milestones, and respond naturally."
+                ? "Listen carefully to the player's audio clip (even if it is a single French word like 'Oui', 'Non', 'Café', 'Plate'). Transcribe what they said, note any helpful pronunciation/phonetic feedback in feedbackEnglish, decide speakerMode ('waiter' for French conversation with Lucas, 'fox_tutor' for English help/translation/vocabulary questions or purely English replies), evaluate any newly fulfilled milestones, and respond naturally."
                 : $"The player said: \"{textInput}\". Decide speakerMode, evaluate any newly fulfilled milestones, and respond naturally.";
 
             string partsJson;
@@ -551,7 +932,7 @@ namespace Alterlife.Immersive
 
             if (string.IsNullOrWhiteSpace(responseBody))
             {
-                SetLabel("GEMINI ERROR · RETRY");
+                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "GEMINI ERROR · RETRY");
                 evaluation.Feedback("Could not reach Google AI Studio (Gemini). Check your Wi-Fi connection and API key, then speak again.");
                 ResetVadCapture();
                 yield break;
@@ -560,7 +941,7 @@ namespace Alterlife.Immersive
             GeminiWaiterTurn turn = ParseGeminiTurn(responseBody);
             if (turn == null)
             {
-                SetLabel("● LISTENING (FR)");
+                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "● LISTENING (FR)");
                 evaluation.Feedback("I did not catch that clearly. Please try speaking again.");
                 ResetVadCapture();
                 yield break;
@@ -573,14 +954,14 @@ namespace Alterlife.Immersive
 
             if (!hasReply)
             {
-                SetLabel("● LISTENING (FR)");
+                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "● LISTENING (FR)");
                 evaluation.Feedback("I could not hear clear speech. Please try speaking again.");
                 ResetVadCapture();
                 yield break;
             }
 
             ApplyParsedTurn(turn, textInput);
-            SetLabel("● LISTENING (FR)");
+            SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "● LISTENING (FR)");
             ResetVadCapture();
         }
 
@@ -668,6 +1049,11 @@ namespace Alterlife.Immersive
             }
         }
 
+        // =====================================================================
+        // Waiter Speech (Gemini TTS + RAM & Persistent Disk Cache)
+        // & Fox Speech (100% Local Piper TTS: fr_FR-siwis + en_US-amy)
+        // =====================================================================
+
         public void Speak(string text, AudioClip prerecorded = null) => SpeakAsWaiter(text);
 
         public void SpeakAsWaiter(string frenchText)
@@ -679,14 +1065,28 @@ namespace Alterlife.Immersive
                 ? npcPersonality.geminiVoiceName
                 : "Puck";
 
-            SpeakOnTarget(
-                speaker,
-                frenchText,
-                voiceName,
-                "waiter_fr",
-                frenchText.Trim());
+            string voiceTag = $"gemini_{voiceName}_fr";
+            StopAllSpeech();
+
+            // 1. Check 0ms RAM Cache + ~2ms Persistent Disk Cache first (0 API calls!)
+            if (TryLoadCachedClip(voiceTag, frenchText, out AudioClip cachedClip))
+            {
+                speaker.clip = cachedClip;
+                speaker.Play();
+                return;
+            }
+
+            if (Application.isBatchMode || !HasGeminiKey)
+                return;
+
+            string hash = ComputeTtsCacheHash(voiceTag, frenchText);
+            speechRoutine = StartCoroutine(SynthesizeWithGeminiTts(speaker, hash, voiceName, frenchText.Trim()));
         }
 
+        /// <summary>
+        /// Speaks using the Fox Companion's 100% local Piper neural TTS (fr_FR-siwis-medium for French,
+        /// en_US-amy-low for English) with RAM + persistent disk caching — 0 Gemini API calls!
+        /// </summary>
         public void SpeakAsFox(string text, bool isFrenchModelPhrase)
         {
             if (string.IsNullOrWhiteSpace(text))
@@ -697,30 +1097,70 @@ namespace Alterlife.Immersive
             if (target == null)
                 return;
 
-            string voiceName = npcPersonality != null && !string.IsNullOrWhiteSpace(npcPersonality.foxVoiceName)
-                ? npcPersonality.foxVoiceName
-                : "Aoede";
-
-            string styleTag = isFrenchModelPhrase ? "fox_fr" : "fox_en";
-            SpeakOnTarget(target, text, voiceName, styleTag, text.Trim());
-        }
-
-        void SpeakOnTarget(AudioSource target, string text, string voiceName, string styleTag, string prompt)
-        {
+            string voiceTag = isFrenchModelPhrase ? "piper_fr_siwis" : "piper_en_amy";
             StopAllSpeech();
 
-            string cacheKey = $"{voiceName}|{styleTag}|{text}";
-            if (ttsCache.TryGetValue(cacheKey, out AudioClip cached) && cached != null)
+            // 1. Check 0ms RAM Cache + ~2ms Persistent Disk Cache first
+            if (TryLoadCachedClip(voiceTag, text, out AudioClip cachedClip))
             {
-                target.clip = cached;
+                target.clip = cachedClip;
                 target.Play();
                 return;
             }
 
-            if (Application.isBatchMode || !HasGeminiKey)
+            if (Application.isBatchMode)
                 return;
 
-            speechRoutine = StartCoroutine(SynthesizeWithGeminiTts(target, cacheKey, voiceName, prompt));
+            EnsurePiperStarted();
+            string hash = ComputeTtsCacheHash(voiceTag, text);
+            speechRoutine = StartCoroutine(SynthesizeWithLocalPiper(target, hash, text.Trim(), isFrenchModelPhrase));
+        }
+
+        IEnumerator SynthesizeWithLocalPiper(AudioSource target, string cacheHash, string text, bool isFrench)
+        {
+            isSynthesizingSpeech = true;
+
+            if (piperTts == null)
+                piperTts = new PiperLocalTts();
+
+            if (!piperTts.Ready)
+            {
+                if (!piperTts.IsInitializing)
+                    yield return piperTts.Prepare();
+                else
+                    while (piperTts.IsInitializing) yield return null;
+            }
+
+            if (!piperTts.Ready || target == null)
+            {
+                isSynthesizingSpeech = false;
+                speechRoutine = null;
+                yield break;
+            }
+
+            Task<PiperLocalTts.AudioResult> synthTask = piperTts.SynthesizeAsync(text, isFrench, speed: 1.0f);
+            while (!synthTask.IsCompleted)
+                yield return null;
+
+            isSynthesizingSpeech = false;
+            speechRoutine = null;
+
+            if (synthTask.IsFaulted || target == null)
+                yield break;
+
+            PiperLocalTts.AudioResult res = synthTask.Result;
+            if (res.samples == null || res.samples.Length == 0 || res.sampleRate <= 0)
+                yield break;
+
+            var clip = AudioClip.Create(isFrench ? "PiperFox_Siwis_FR" : "PiperFox_Amy_EN", res.samples.Length, 1, res.sampleRate, false);
+            clip.SetData(res.samples, 0);
+            CacheTtsClipInRam(cacheHash, clip);
+
+            byte[] wavBytes = EncodeWav(res.samples, 1, res.sampleRate);
+            SaveWavToDiskCache(cacheHash, wavBytes);
+
+            target.clip = clip;
+            target.Play();
         }
 
         public void StopAllSpeech()
@@ -741,7 +1181,7 @@ namespace Alterlife.Immersive
             isSynthesizingSpeech = false;
         }
 
-        IEnumerator SynthesizeWithGeminiTts(AudioSource target, string cacheKey, string voiceName, string verbatimText)
+        IEnumerator SynthesizeWithGeminiTts(AudioSource target, string cacheHash, string voiceName, string verbatimText)
         {
             string apiKey = ResolveGeminiKey();
             if (string.IsNullOrWhiteSpace(apiKey) || target == null)
@@ -807,10 +1247,18 @@ namespace Alterlife.Immersive
                         if (inline != null)
                         {
                             byte[] rawAudio = Convert.FromBase64String(inline.data);
-                            AudioClip clip = DecodeGeminiAudio(rawAudio, inline.mimeType, $"GeminiVoice_{voiceName}");
+                            AudioClip clip = DecodeGeminiAudio(rawAudio, inline.mimeType, $"GeminiVoice_{voiceName}", out float[] floatSamples, out int decodedRate);
                             if (clip != null)
                             {
-                                CacheTtsClip(cacheKey, clip);
+                                CacheTtsClipInRam(cacheHash, clip);
+
+                                // Persist WAV to disk so future repetitions/sessions load in ~2ms with 0 API calls
+                                bool isAlreadyRiffWav = rawAudio.Length >= 44 &&
+                                    rawAudio[0] == (byte)'R' && rawAudio[1] == (byte)'I' &&
+                                    rawAudio[2] == (byte)'F' && rawAudio[3] == (byte)'F';
+                                byte[] wavForDisk = isAlreadyRiffWav ? rawAudio : EncodeWav(floatSamples, 1, decodedRate);
+                                SaveWavToDiskCache(cacheHash, wavForDisk);
+
                                 target.clip = clip;
                                 target.Play();
                                 break;
@@ -828,8 +1276,9 @@ namespace Alterlife.Immersive
             speechRoutine = null;
         }
 
-        void CacheTtsClip(string key, AudioClip clip)
+        void CacheTtsClipInRam(string key, AudioClip clip)
         {
+            if (string.IsNullOrWhiteSpace(key) || clip == null) return;
             if (ttsCache.ContainsKey(key)) return;
             ttsCache[key] = clip;
             ttsCacheOrder.Enqueue(key);
@@ -850,20 +1299,20 @@ namespace Alterlife.Immersive
             }
         }
 
-        /// <summary>
-        /// Decodes Gemini TTS audio supporting both RIFF/WAV containers (audio/wav) and headerless 16-bit PCM (audio/L16).
-        /// </summary>
-        public static AudioClip DecodeGeminiAudio(byte[] bytes, string mimeType, string clipName)
+        public static AudioClip DecodeGeminiAudio(byte[] bytes, string mimeType, string clipName) =>
+            DecodeGeminiAudio(bytes, mimeType, clipName, out _, out _);
+
+        public static AudioClip DecodeGeminiAudio(byte[] bytes, string mimeType, string clipName, out float[] samples, out int sampleRate)
         {
+            samples = null;
+            sampleRate = ParseSampleRate(mimeType, 24000);
             if (bytes == null || bytes.Length < 4)
                 return null;
 
             int channels = 1;
-            int sampleRate = ParseSampleRate(mimeType, 24000);
             int dataOffset = 0;
             int dataLength = bytes.Length;
 
-            // Detect RIFF WAV container header cleanly
             if (bytes.Length >= 44 &&
                 bytes[0] == (byte)'R' && bytes[1] == (byte)'I' &&
                 bytes[2] == (byte)'F' && bytes[3] == (byte)'F')
@@ -905,7 +1354,7 @@ namespace Alterlife.Immersive
             if (framesPerChannel <= 0)
                 return null;
 
-            float[] samples = new float[framesPerChannel * channels];
+            samples = new float[framesPerChannel * channels];
             for (int i = 0; i < samples.Length; i++)
             {
                 int idx = dataOffset + i * 2;
@@ -959,24 +1408,26 @@ namespace Alterlife.Immersive
             history.Clear();
             LastTranscript = null;
             ResetVadCapture();
+            RefreshHudMicVisual();
+            EnsurePiperStarted();
 
             if (Application.isBatchMode)
                 return;
 
             if (!HasGeminiKey)
             {
-                SetLabel("NO GEMINI API KEY");
+                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "NO GEMINI API KEY");
                 return;
             }
 
             if (autoListenVad && isActiveAndEnabled && gameObject.activeInHierarchy)
             {
-                SetLabel("STARTING MICROPHONE");
+                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "STARTING MICROPHONE");
                 StartCoroutine(EnsureMicrophoneRingRunning());
             }
             else
             {
-                SetLabel("● READY");
+                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "● READY");
             }
         }
 
@@ -1000,6 +1451,8 @@ namespace Alterlife.Immersive
 
         void OnDestroy()
         {
+            piperTts?.Dispose();
+            piperTts = null;
             foreach (var kv in ttsCache)
                 if (kv.Value != null) Destroy(kv.Value);
             ttsCache.Clear();
