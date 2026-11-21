@@ -16,6 +16,9 @@ namespace Alterlife.Immersive
         public bool confirmationChallengeResolved;
         public bool orderServed;
         public bool isPracticeMode;
+        public bool isExploringCity;
+        public string lastWaiterFrench;
+        public string lastWaiterEnglish;
         public bool foxLevel2Visible;
         public FoxHelpOption[] activeFoxOptions;
         public int autonomousObjectives;

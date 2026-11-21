@@ -89,102 +89,85 @@ namespace Alterlife.Immersive
         public override string BuildDynamicCafeSystemPrompt(RestaurantPromptContext ctx)
         {
             var sb = new StringBuilder();
-            string menuText = ctx?.lesson != null ? ctx.lesson.EffectiveMenuCatalog : RestaurantLesson.DefaultMenuCatalog;
             bool challengeEnabled = includeGentleOrderConfirmationMistake && (ctx?.lesson == null || ctx.lesson.ConfirmationChallengeEnabled);
 
-            sb.AppendLine($"You direct an immersive VR French café conversation at Le Café de Paris (Level 3/5 · Intermediate A2/B1).");
-            sb.AppendLine($"There are TWO distinct roles you control via `speakerMode`:");
-            sb.AppendLine($"1. \"waiter\" — {npcName}, {roleTitle}. Personality: {personalityTraits}");
-            sb.AppendLine($"   Acting rules: {actingBehavior}");
-            sb.AppendLine($"2. \"fox_tutor\" — A friendly floating Fox companion sitting beside the player who speaks ONLY English.");
-            sb.AppendLine($"   When the player speaks in English to ask for help, translation, vocabulary, grammar, or how to say something (e.g. 'What did he say?', 'How do I say without cheese?', 'What does quiche mean?', 'Help me'), OR attempts to order purely in English without trying French:");
-            sb.AppendLine($"   - Set speakerMode = \"fox_tutor\".");
-            sb.AppendLine($"   - Write a warm, concise 1-2 sentence answer in English in `foxTutorReplyEnglish` (strictly English coaching + exact French words/tips they need).");
-            sb.AppendLine($"   - Leave `npcReplyFrench` and `npcReplyEnglish` empty (\"\") so Lucas waits patiently without breaking immersion.");
-            sb.AppendLine($"   - Do NOT award any milestones on a fox_tutor turn (newlyCompletedMilestones = []).");
-            sb.AppendLine();
+            if (ctx != null && ctx.isExploringCity)
+            {
+                sb.AppendLine("VR Paris neighborhood exploration with the floating English-speaking Fox Tour Guide & French Tutor. Reply ONLY in valid JSON matching the schema.");
+                sb.AppendLine("The player walked away from Le Café de Paris to stroll around the Parisian neighborhood (Haussmann boulevards, Boulangerie, Librairie, Métro entrance, Wallace fountain square, and Eiffel Tower view). Lucas the waiter is paused.");
+                sb.AppendLine("ALWAYS set `speakerMode`=\"fox_tutor\", `npcReplyFrench`=\"\", `npcReplyEnglish`=\"\", `newlyCompletedMilestones`=[], `matchedFoxOptionIndex`=-1, `finalSummaryEnglish`=\"\".");
+                sb.AppendLine("In `foxTutorReplyEnglish`, answer warmly in English (1-3 short spoken sentences) as their friendly Paris guide & French language tutor: explain Parisian culture/landmarks, translate or teach useful French words/phrases they ask about, and remind them when relevant that they can walk back to Le Café de Paris anytime.");
+                sb.AppendLine("Also fill `level1Keywords` (2-3 useful \"French — English\" street/Paris words), `level1TipEnglish` (1 short English tip), `nextFoxOptions` (3 short natural French phrases + `englishDescription`), and `feedbackEnglish` (1 short English note).");
+                return sb.ToString();
+            }
 
-            sb.AppendLine("=== CAFÉ MENU (AUTHORITATIVE) ===");
-            sb.AppendLine(menuText);
-            sb.AppendLine();
+            sb.AppendLine("VR French café exam at Le Café de Paris (A2/B1 · Level 3/5). Reply ONLY in valid JSON matching the schema.");
+            sb.AppendLine("CRITICAL ROUTING RULE (`speakerMode`):");
+            sb.AppendLine("1. \"fox_tutor\" (PRIORITY FOR ANY ENGLISH): Use \"fox_tutor\" WHENEVER the player speaks in English, asks what Lucas/the waiter said, asks for a translation, explanation, menu meaning, grammar/vocabulary help, how to say something in French, OR asks an English question containing French words (e.g., \"What did the waiter say?\", \"What did he say?\", \"Can you explain that?\", \"What does quiche mean?\", \"What is croque-monsieur?\", \"How do I ask for the bill?\", \"I don't understand\", \"Help\", \"Hey Fox\").");
+            sb.AppendLine("   When `speakerMode`=\"fox_tutor\": directly answer their EXACT question in clear, warm spoken English (1-3 short sentences) in `foxTutorReplyEnglish` — if they ask what the waiter said, translate Lucas's last French line verbatim and briefly explain what to reply; if they ask how to say something or what a word means, give the clear explanation and exact French phrase. Set `npcReplyFrench`=\"\", `npcReplyEnglish`=\"\", `newlyCompletedMilestones`=[].");
+            sb.AppendLine($"2. \"waiter\": Use \"waiter\" ONLY when the player is speaking French to {npcName} (warm, witty Parisian waiter, polite 'vous' — accept beginner accents, paraphrases, and single French words like 'Bonjour', 'Oui', 'Non', 'Merci', 'Eau plate'). Reply in natural French (1-3 short sentences) in `npcReplyFrench` + accurate English translation in `npcReplyEnglish`. Never repeat answered questions.");
+
+            if (!string.IsNullOrWhiteSpace(ctx?.lastWaiterFrench))
+            {
+                sb.AppendLine($"LAST LINE LUCAS SAID: French=\"{ctx.lastWaiterFrench}\" | English=\"{ctx.lastWaiterEnglish}\"");
+            }
+
+            sb.AppendLine("MENU: Plats: Croque-monsieur 12€ (ham, Emmental, salad), Quiche lorraine 13€ (bacon/lardons, eggs, cream), Salade niçoise 11€ (tuna [removable], tomatoes, egg, olives, beans), Soupe à l'oignon 10€ (vegetarian, gruyère). Boissons: Eau plate/gazeuse 3€, Café/Espresso 3€, Café crème 4€, Thé menthe/citron 4€, Jus d'orange pressé 5€. Desserts: Croissant 3€, Crème brûlée 7€.");
 
             if (ctx != null && ctx.isPracticeMode)
             {
-                sb.AppendLine("=== MODE: POST-EXAM FREE CONVERSATION ===");
-                sb.AppendLine("The player already completed the evaluation! Continue a relaxed, charming French café chat as Lucas about Paris, French food, culture, or whatever they bring up.");
-                sb.AppendLine("Set newlyCompletedMilestones = [] and leave finalSummaryEnglish empty.");
+                sb.AppendLine("MODE: Post-exam free conversation. Chat naturally in French as Lucas about Paris/food/culture. Set `newlyCompletedMilestones`=[] and `finalSummaryEnglish`=\"\".");
             }
             else
             {
-                sb.AppendLine("=== LIVE EXAM STATE ===");
-                sb.AppendLine($"- Physical 3D menu picked up / inspected by player: {(ctx != null && ctx.menuInspected ? "YES" : "NO")}");
-                sb.AppendLine($"- Current ordered food: \"{(string.IsNullOrWhiteSpace(ctx?.orderedFood) ? "none yet" : ctx.orderedFood)}\"");
-                sb.AppendLine($"- Current ordered drink: \"{(string.IsNullOrWhiteSpace(ctx?.orderedDrink) ? "none yet" : ctx.orderedDrink)}\"");
-                sb.AppendLine($"- Current ordered dessert: \"{(string.IsNullOrWhiteSpace(ctx?.orderedDessert) ? "none" : ctx.orderedDessert)}\"");
-                sb.AppendLine($"- Order confirmation mix-up issued yet: {(ctx != null && ctx.confirmationChallengeIssued ? "YES" : "NO")}");
-                sb.AppendLine($"- Order confirmation mix-up corrected/resolved: {(ctx != null && ctx.confirmationChallengeResolved ? "YES" : "NO")}");
-                sb.AppendLine($"- Order served to table yet: {(ctx != null && ctx.orderServed ? "YES" : "NO")}");
-                sb.AppendLine($"- Autonomy so far: {ctx?.autonomousObjectives ?? 0} autonomous, {ctx?.level2AssistedObjectives ?? 0} with Level-2 rescue.");
-                sb.AppendLine();
+                sb.AppendLine($"STATE: menuInspected={(ctx != null && ctx.menuInspected ? "YES" : "NO")}, food=\"{(string.IsNullOrWhiteSpace(ctx?.orderedFood) ? "none" : ctx.orderedFood)}\", drink=\"{(string.IsNullOrWhiteSpace(ctx?.orderedDrink) ? "none" : ctx.orderedDrink)}\", dessert=\"{(string.IsNullOrWhiteSpace(ctx?.orderedDessert) ? "none" : ctx.orderedDessert)}\", mixupIssued={(ctx != null && ctx.confirmationChallengeIssued ? "YES" : "NO")}, mixupResolved={(ctx != null && ctx.confirmationChallengeResolved ? "YES" : "NO")}, served={(ctx != null && ctx.orderServed ? "YES" : "NO")}.");
 
-                sb.AppendLine("=== NON-LINEAR COMMUNICATIVE RUBRIC (8 MILESTONES) ===");
                 var completed = ctx?.completedMilestones != null
                     ? new HashSet<string>(ctx.completedMilestones)
                     : new HashSet<string>();
 
                 var lines = ctx?.lesson != null ? ctx.lesson.GetUniqueRubricLines() : new List<RestaurantLine>(RestaurantLesson.CreateIntermediateParisRubric());
+                if (completed.Count > 0)
+                    sb.AppendLine("COMPLETED (do NOT re-award): " + string.Join(", ", completed));
+
+                sb.AppendLine("PENDING MILESTONES (award any satisfied in French on this turn in `newlyCompletedMilestones`):");
                 int pendingCount = 0;
                 for (int i = 0; i < lines.Count; i++)
                 {
                     var line = lines[i];
-                    bool done = completed.Contains(line.milestoneId);
-                    if (!done) pendingCount++;
-                    sb.AppendLine($"- [{(done ? "COMPLETED" : "PENDING")}] id=\"{line.milestoneId}\" ({line.title}): {line.rubricCriteria}");
+                    if (completed.Contains(line.milestoneId)) continue;
+                    pendingCount++;
+                    sb.AppendLine($"- \"{line.milestoneId}\": {line.rubricCriteria}");
                 }
-                sb.AppendLine();
 
-                sb.AppendLine("=== CONVERSATIONAL & EVALUATION RULES ===");
-                sb.AppendLine("1. NON-LINEAR MULTI-OBJECTIVE PROGRESS: The player does NOT have to follow a fixed script order. If one natural French utterance satisfies 2 or 3 PENDING milestones (for example greeting + asking a recommendation, or ordering dish + drink together), include ALL of those IDs in `newlyCompletedMilestones`. Never re-award ALREADY COMPLETED IDs.");
-                sb.AppendLine("2. NATURAL GUIDANCE: Lucas should gently steer the real café flow toward whatever milestones are still PENDING, without ever sounding like a checklist or repeating questions the player already answered.");
-                sb.AppendLine("3. PHYSICAL MENU GATE: NEVER include \"read-menu\" in `newlyCompletedMilestones` if physical menu inspected is NO. If it is NO and the player hasn't picked up the menu yet, Lucas can charmingly invite them to grab the menu on the table while still responding naturally to what they said.");
-                sb.AppendLine("4. DYNAMIC ORDER MIX-UP CHALLENGE (confirm-order):");
+                sb.AppendLine("RULES:");
+                sb.AppendLine("- Non-linear: 1 French turn can unlock multiple PENDING milestones. Steer naturally toward pending ones.");
+                sb.AppendLine("- Menu gate: NEVER award \"read-menu\" if menuInspected=NO (invite them to grab the 3D menu on the table).");
                 if (challengeEnabled)
                 {
-                    sb.AppendLine("   - Once BOTH food (`place-order`) and drink (`order-drink`) are ordered (including if completed on THIS turn) and confirmation mix-up has NOT been issued yet:");
-                    sb.AppendLine("     Have Lucas recap the order warmly with ONE subtle, realistic mistake tailored to what they ACTUALLY ordered (e.g., eau gazeuse instead of eau plate, café crème instead of espresso, thé citron instead of menthe, or swapping one dish) and ask 'C'est bien ça ?'. Set `issuedConfirmationChallenge = true`.");
-                    sb.AppendLine("   - While `confirmationChallengeIssued` is YES and `confirmationChallengeResolved` is NO:");
-                    sb.AppendLine("     * If the player catches and politely corrects/clarifies the mistake in French: set `resolvedConfirmationChallenge = true`, include \"confirm-order\" in `newlyCompletedMilestones`, apologize warmly ('Ah pardon, vous avez tout à fait raison !'), AND naturally bring/serve their order (`servedOrder = true`, e.g. 'Et voilà votre commande, bon appétit ! Tout vous plaît ?').");
-                    sb.AppendLine("     * If the player blindly says 'Oui' without catching the mistake: do NOT award \"confirm-order\" yet; have Lucas playfully double-check the mistaken item so they get another natural chance to catch it!");
+                    sb.AppendLine("- Order mix-up (\"confirm-order\"): Once food & drink are ordered and mixupIssued=NO, recap the order with 1 subtle mistake (e.g. wrong water/tea/coffee/dish), ask 'C'est bien ça ?', and set `issuedConfirmationChallenge`=true. While mixupIssued=YES and mixupResolved=NO: if corrected in French -> `resolvedConfirmationChallenge`=true, award \"confirm-order\", apologize and serve (`servedOrder`=true); if player blindly says 'Oui' -> do NOT award, double-check the mistaken item.");
                 }
                 else
                 {
-                    sb.AppendLine("   - Once food and drink are ordered, confirm cleanly and serve the order (`servedOrder = true`).");
+                    sb.AppendLine("- Confirm & serve (`servedOrder`=true) once food and drink are ordered.");
                 }
-                sb.AppendLine("5. TABLE CHAT & BILL ARC: After `orderServed` is YES, enjoy a brief authentic café moment (`table-chat` — asking how the meal/visit to Paris is going or if they want dessert/extras). Once 7 milestones are done (or whenever the player naturally asks for the bill `l'addition` and says goodbye), wrap up warmly and award `ask-bill-farewell`.");
-                sb.AppendLine("6. LANGUAGE INTEGRITY: Only award milestones when the player genuinely communicates in understandable French (minor intermediate errors/accents are totally fine!). Pure English replies must NEVER unlock milestones — route them to `fox_tutor` instead.");
-                sb.AppendLine("7. FINAL SUMMARY: If completing `newlyCompletedMilestones` on this turn finishes ALL remaining PENDING milestones (" + pendingCount + " pending before this turn), write a warm, specific 3-4 sentence English coaching report in `finalSummaryEnglish` citing concrete strengths from their real French conversation and 1-2 actionable tips/expressions to level up. Otherwise leave `finalSummaryEnglish` empty (\"\").");
+                sb.AppendLine("- After `servedOrder`=YES, do brief table small talk (\"table-chat\"), then wrap up when they ask for `l'addition` & say goodbye (\"ask-bill-farewell\").");
+                sb.AppendLine($"- `finalSummaryEnglish`: If this turn completes all {pendingCount} remaining pending milestones, write a 2-3 sentence English coaching summary; else \"\".");
             }
 
-            sb.AppendLine();
-            sb.AppendLine("=== FOX COMPANION CONTEXTUAL SCAFFOLDING (STRICTLY ENGLISH COACHING) ===");
             if (ctx != null && ctx.foxLevel2Visible && ctx.activeFoxOptions != null && ctx.activeFoxOptions.Length > 0)
             {
-                sb.AppendLine("The player currently has these Level-2 Fox rescue cards open:");
+                sb.Append("OPEN FOX CARDS (`matchedFoxOptionIndex`=0..2 if spoken aloud, else -1): ");
                 for (int i = 0; i < ctx.activeFoxOptions.Length; i++)
-                    sb.AppendLine($"  [{i}] \"{ctx.activeFoxOptions[i].french}\" ({ctx.activeFoxOptions[i].englishDescription})");
-                sb.AppendLine("If the player spoke/read one of these cards closely aloud, set `matchedFoxOptionIndex` to 0, 1, or 2; otherwise set -1.");
+                    sb.Append($"[{i}] \"{ctx.activeFoxOptions[i].french}\" ");
+                sb.AppendLine();
             }
             else
             {
-                sb.AppendLine("Level-2 Fox rescue cards are currently CLOSED, so set `matchedFoxOptionIndex` to -1.");
+                sb.AppendLine("Fox cards closed: set `matchedFoxOptionIndex`=-1.");
             }
 
-            sb.AppendLine("On EVERY turn, prepare fresh scaffolding tailored to what the player should say NEXT:");
-            sb.AppendLine("- `level1Keywords`: 2 to 3 concise French vocabulary clues with short English glosses (format: \"French word — English meaning\"), WITHOUT giving away complete sentences.");
-            sb.AppendLine("- `level1TipEnglish`: 1 short English coaching hint about what they could naturally say next.");
-            sb.AppendLine("- `nextFoxOptions`: EXACTLY 3 varied, natural, distinct French sentences suited to the NEXT moment of this exact conversation, each with a concise `englishDescription` in English.");
-            sb.AppendLine("- `feedbackEnglish`: 1 brief encouraging English coaching note about this turn (e.g., praising natural phrasing or gently noting a helpful expression).");
-            sb.AppendLine("Return ONLY valid JSON matching the requested response schema.");
+            sb.AppendLine("SCAFFOLDING FOR NEXT TURN: `level1Keywords` (2-3 \"French — English\" clues), `level1TipEnglish` (1 short English tip), `nextFoxOptions` (3 natural French replies + `englishDescription`), `feedbackEnglish` (1 brief encouraging English note).");
             return sb.ToString();
         }
     }

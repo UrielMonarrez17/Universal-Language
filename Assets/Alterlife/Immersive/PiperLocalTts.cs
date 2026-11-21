@@ -36,117 +36,165 @@ namespace Alterlife.Immersive
         readonly object engineLock = new object();
         static readonly object installLock = new object();
 
-        IntPtr frenchHandle;
-        IntPtr englishHandle;
+        string extractedRoot;
+        Task<bool> activePrepareTask;
         volatile bool disposed;
 
         public bool Ready { get; private set; }
-        public bool IsInitializing { get; private set; }
+        public bool IsInitializing => activePrepareTask != null && !activePrepareTask.IsCompleted;
+        public string LastError { get; private set; } = "";
 
+        /// <summary>
+        /// Ensures Piper models are extracted into persistentDataPath.
+        /// Safe against StopAllCoroutines(): download and extraction completion run via
+        /// AsyncOperation.completed + TaskCompletionSource so cancelling a caller coroutine
+        /// can never strand IsInitializing=true.
+        /// </summary>
         public IEnumerator Prepare()
         {
-            if (Ready || IsInitializing || disposed)
+            if (Ready || disposed)
                 yield break;
 
-            IsInitializing = true;
-            string root = Path.Combine(Application.persistentDataPath, ExtractedFolderName);
-            string frModelPath = Path.Combine(root, FrenchModelFile);
-            string enModelPath = Path.Combine(root, EnglishModelFile);
-            string espeakPath = Path.Combine(root, EspeakDirName);
-
-            string tempArchive = null;
-            string sourceArchivePath = null;
-            if (!File.Exists(frModelPath) || !File.Exists(enModelPath) || !Directory.Exists(espeakPath))
+            string root = GetOrCacheRootPath();
+            if (AreModelFilesPresent(root))
             {
-                string directStreamingPath = Path.Combine(Application.streamingAssetsPath, ArchiveFileName);
-                if (!Application.streamingAssetsPath.Contains("://") && File.Exists(directStreamingPath))
-                {
-                    sourceArchivePath = directStreamingPath;
-                }
-                else
-                {
-                    string streamingUrl = Application.streamingAssetsPath + "/" + ArchiveFileName;
-                    if (!streamingUrl.Contains("://"))
-                        streamingUrl = "file://" + streamingUrl;
-
-                    tempArchive = Path.Combine(Application.temporaryCachePath, "piper_" + Guid.NewGuid().ToString("N") + ".zip");
-                    using (var request = UnityWebRequest.Get(streamingUrl))
-                    {
-                        request.downloadHandler = new DownloadHandlerFile(tempArchive) { removeFileOnAbort = true };
-                        var op = request.SendWebRequest();
-                        while (!op.isDone)
-                            yield return null;
-
-                        if (request.result != UnityWebRequest.Result.Success)
-                        {
-                            if (File.Exists(tempArchive)) { try { File.Delete(tempArchive); } catch { } }
-                            Debug.LogWarning("[PiperLocalTts] Could not load " + ArchiveFileName + " from StreamingAssets: " + request.error);
-                            IsInitializing = false;
-                            yield break;
-                        }
-                    }
-                    sourceArchivePath = tempArchive;
-                }
+                Ready = true;
+                LastError = "";
+                yield break;
             }
 
-            var initTask = Task.Run(() =>
-            {
-                try
-                {
-                    lock (installLock)
-                    {
-                        if ((!File.Exists(frModelPath) || !File.Exists(enModelPath) || !Directory.Exists(espeakPath))
-                            && !string.IsNullOrEmpty(sourceArchivePath) && File.Exists(sourceArchivePath))
-                        {
-                            string staging = root + ".tmp_" + Guid.NewGuid().ToString("N").Substring(0, 6);
-                            if (Directory.Exists(staging)) Directory.Delete(staging, true);
-                            ZipFile.ExtractToDirectory(sourceArchivePath, staging);
-                            if (Directory.Exists(root)) Directory.Delete(root, true);
-                            Directory.Move(staging, root);
-                        }
-                    }
-
-                    if (!File.Exists(frModelPath) || !File.Exists(enModelPath))
-                        return;
-
-                    string frTokensPath = Path.Combine(root, FrenchTokensFile);
-                    string enTokensPath = Path.Combine(root, EnglishTokensFile);
-
-                    IntPtr fr = CreateVitsHandle(frModelPath, frTokensPath, espeakPath);
-                    IntPtr en = CreateVitsHandle(enModelPath, enTokensPath, espeakPath);
-
-                    lock (engineLock)
-                    {
-                        if (disposed)
-                        {
-                            if (fr != IntPtr.Zero) SherpaOnnxDestroyOfflineTts(fr);
-                            if (en != IntPtr.Zero) SherpaOnnxDestroyOfflineTts(en);
-                            return;
-                        }
-                        frenchHandle = fr;
-                        englishHandle = en;
-                        Ready = fr != IntPtr.Zero && en != IntPtr.Zero;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning("[PiperLocalTts] Initialization failed: " + ex.Message);
-                }
-                finally
-                {
-                    if (tempArchive != null && File.Exists(tempArchive))
-                    {
-                        try { File.Delete(tempArchive); } catch { }
-                    }
-                }
-            });
-
-            while (!initTask.IsCompleted)
+            Task<bool> task = GetOrStartPrepareTask(root);
+            while (task != null && !task.IsCompleted && !disposed)
                 yield return null;
 
-            IsInitializing = false;
             if (Ready)
-                Debug.Log("[PiperLocalTts] Ready (fr_FR-siwis-medium INT8 + en_US-amy-low INT8).");
+                Debug.Log("[PiperLocalTts] Ready (on-demand VITS INT8: 0 MB idle native RAM).");
+        }
+
+        public void BeginPrepareNonBlocking()
+        {
+            if (Ready || disposed)
+                return;
+
+            string root = GetOrCacheRootPath();
+            if (AreModelFilesPresent(root))
+            {
+                Ready = true;
+                LastError = "";
+                return;
+            }
+
+            GetOrStartPrepareTask(root);
+        }
+
+        Task<bool> GetOrStartPrepareTask(string root)
+        {
+            if (activePrepareTask != null && !activePrepareTask.IsCompleted)
+                return activePrepareTask;
+
+            string directStreamingPath = Path.Combine(Application.streamingAssetsPath, ArchiveFileName);
+            if (!Application.streamingAssetsPath.Contains("://") && File.Exists(directStreamingPath))
+            {
+                activePrepareTask = Task.Run(() => RunExtraction(root, directStreamingPath, null));
+                return activePrepareTask;
+            }
+
+            string streamingUrl = Application.streamingAssetsPath + "/" + ArchiveFileName;
+            if (!streamingUrl.Contains("://"))
+                streamingUrl = "file://" + streamingUrl;
+
+            string tempArchive = Path.Combine(Application.temporaryCachePath, "piper_" + Guid.NewGuid().ToString("N") + ".zip");
+            var tcs = new TaskCompletionSource<bool>();
+            activePrepareTask = tcs.Task;
+
+            var request = UnityWebRequest.Get(streamingUrl);
+            request.downloadHandler = new DownloadHandlerFile(tempArchive) { removeFileOnAbort = true };
+            var op = request.SendWebRequest();
+            op.completed += _ =>
+            {
+                bool ok = request.result == UnityWebRequest.Result.Success;
+                string err = request.error;
+                request.Dispose();
+
+                if (!ok || disposed)
+                {
+                    if (File.Exists(tempArchive)) { try { File.Delete(tempArchive); } catch { } }
+                    LastError = "Download failed: " + err;
+                    Debug.LogWarning("[PiperLocalTts] Could not load " + ArchiveFileName + " from StreamingAssets: " + err);
+                    tcs.TrySetResult(false);
+                    return;
+                }
+
+                Task.Run(() =>
+                {
+                    bool extracted = RunExtraction(root, tempArchive, tempArchive);
+                    tcs.TrySetResult(extracted);
+                });
+            };
+
+            return activePrepareTask;
+        }
+
+        bool RunExtraction(string root, string sourceArchivePath, string tempArchiveToDelete)
+        {
+            try
+            {
+                ExtractArchiveIfNeeded(root, sourceArchivePath);
+                if (!disposed && AreModelFilesPresent(root))
+                {
+                    Ready = true;
+                    LastError = "";
+                    return true;
+                }
+                LastError = "Model files missing after extraction at " + root;
+                Debug.LogWarning("[PiperLocalTts] " + LastError);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                LastError = "Extraction failed: " + ex.Message;
+                Debug.LogWarning("[PiperLocalTts] " + LastError);
+                return false;
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(tempArchiveToDelete) && File.Exists(tempArchiveToDelete))
+                {
+                    try { File.Delete(tempArchiveToDelete); } catch { }
+                }
+            }
+        }
+
+        string GetOrCacheRootPath()
+        {
+            if (string.IsNullOrEmpty(extractedRoot))
+                extractedRoot = Path.Combine(Application.persistentDataPath, ExtractedFolderName);
+            return extractedRoot;
+        }
+
+        static bool AreModelFilesPresent(string root)
+        {
+            if (string.IsNullOrEmpty(root)) return false;
+            return File.Exists(Path.Combine(root, FrenchModelFile)) &&
+                   File.Exists(Path.Combine(root, FrenchTokensFile)) &&
+                   File.Exists(Path.Combine(root, EnglishModelFile)) &&
+                   File.Exists(Path.Combine(root, EnglishTokensFile)) &&
+                   Directory.Exists(Path.Combine(root, EspeakDirName));
+        }
+
+        static void ExtractArchiveIfNeeded(string root, string sourceArchivePath)
+        {
+            lock (installLock)
+            {
+                if (!AreModelFilesPresent(root) && !string.IsNullOrEmpty(sourceArchivePath) && File.Exists(sourceArchivePath))
+                {
+                    string staging = root + ".tmp_" + Guid.NewGuid().ToString("N").Substring(0, 6);
+                    if (Directory.Exists(staging)) Directory.Delete(staging, true);
+                    ZipFile.ExtractToDirectory(sourceArchivePath, staging);
+                    if (Directory.Exists(root)) Directory.Delete(root, true);
+                    Directory.Move(staging, root);
+                }
+            }
         }
 
         static IntPtr CreateVitsHandle(string modelPath, string tokensPath, string dataDir)
@@ -166,7 +214,7 @@ namespace Alterlife.Immersive
                         LengthScale = 1.0f,
                         DictDir = ""
                     },
-                    NumThreads = 2,
+                    NumThreads = 1,
                     Debug = 0,
                     Provider = "cpu",
                     Matcha = OfflineTtsMatchaModelConfig.CreateEmpty(),
@@ -185,44 +233,94 @@ namespace Alterlife.Immersive
             return SherpaOnnxCreateOfflineTts(ref config);
         }
 
+        /// <summary>
+        /// Synthesizes speech on demand by loading ONLY the requested language model (FR or EN),
+        /// generating the waveform, and immediately destroying the native ONNX session so ~250+ MB
+        /// of ONNX Runtime BFCArena activation buffers are freed back to the OS right away.
+        /// </summary>
         public Task<AudioResult> SynthesizeAsync(string text, bool isFrench, float speed = 1.0f)
         {
+            string root = GetOrCacheRootPath();
+            float clampedSpeed = Mathf.Clamp(speed, 0.55f, 1.45f);
             return Task.Run(() =>
             {
-                if (disposed || !Ready || string.IsNullOrWhiteSpace(text))
+                if (disposed || string.IsNullOrWhiteSpace(text))
                     return default;
 
                 lock (engineLock)
                 {
-                    if (disposed || !Ready)
+                    if (disposed || !Ready || !AreModelFilesPresent(root))
+                    {
+                        Debug.LogWarning($"[PiperLocalTts] Skip synthesis: disposed={disposed}, ready={Ready}, filesPresent={AreModelFilesPresent(root)}");
                         return default;
+                    }
 
-                    IntPtr handle = isFrench ? frenchHandle : englishHandle;
+                    string modelPath = Path.Combine(root, isFrench ? FrenchModelFile : EnglishModelFile);
+                    string tokensPath = Path.Combine(root, isFrench ? FrenchTokensFile : EnglishTokensFile);
+                    string espeakPath = Path.Combine(root, EspeakDirName);
+
+                    IntPtr handle = IntPtr.Zero;
+                    try
+                    {
+                        handle = CreateVitsHandle(modelPath, tokensPath, espeakPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        LastError = "CreateVitsHandle exception: " + ex.Message;
+                        Debug.LogError("[PiperLocalTts] " + LastError);
+                        return default;
+                    }
+
                     if (handle == IntPtr.Zero)
+                    {
+                        LastError = "SherpaOnnxCreateOfflineTts returned null handle for " + modelPath;
+                        Debug.LogError("[PiperLocalTts] " + LastError);
                         return default;
-
-                    byte[] utf8 = Encoding.UTF8.GetBytes(text.Trim());
-                    byte[] nullTerminated = new byte[utf8.Length + 1];
-                    Buffer.BlockCopy(utf8, 0, nullTerminated, 0, utf8.Length);
-                    nullTerminated[utf8.Length] = 0;
-
-                    IntPtr audioPtr = SherpaOnnxOfflineTtsGenerate(handle, nullTerminated, 0, speed);
-                    if (audioPtr == IntPtr.Zero)
-                        return default;
+                    }
 
                     try
                     {
-                        GeneratedAudioImpl impl = Marshal.PtrToStructure<GeneratedAudioImpl>(audioPtr);
-                        if (impl.NumSamples <= 0 || impl.Samples == IntPtr.Zero || impl.SampleRate <= 0)
-                            return default;
+                        byte[] utf8 = Encoding.UTF8.GetBytes(text.Trim());
+                        byte[] nullTerminated = new byte[utf8.Length + 1];
+                        Buffer.BlockCopy(utf8, 0, nullTerminated, 0, utf8.Length);
+                        nullTerminated[utf8.Length] = 0;
 
-                        float[] pcm = new float[impl.NumSamples];
-                        Marshal.Copy(impl.Samples, pcm, 0, impl.NumSamples);
-                        return new AudioResult { samples = pcm, sampleRate = impl.SampleRate };
+                        IntPtr audioPtr = SherpaOnnxOfflineTtsGenerate(handle, nullTerminated, 0, clampedSpeed);
+                        if (audioPtr == IntPtr.Zero)
+                        {
+                            LastError = "SherpaOnnxOfflineTtsGenerate returned null audio pointer.";
+                            Debug.LogWarning("[PiperLocalTts] " + LastError);
+                            return default;
+                        }
+
+                        try
+                        {
+                            GeneratedAudioImpl impl = Marshal.PtrToStructure<GeneratedAudioImpl>(audioPtr);
+                            if (impl.NumSamples <= 0 || impl.Samples == IntPtr.Zero || impl.SampleRate <= 0)
+                            {
+                                LastError = $"Empty Piper audio output (samples={impl.NumSamples}, rate={impl.SampleRate}).";
+                                Debug.LogWarning("[PiperLocalTts] " + LastError);
+                                return default;
+                            }
+
+                            float[] pcm = new float[impl.NumSamples];
+                            Marshal.Copy(impl.Samples, pcm, 0, impl.NumSamples);
+                            return new AudioResult { samples = pcm, sampleRate = impl.SampleRate };
+                        }
+                        finally
+                        {
+                            SherpaOnnxDestroyOfflineTtsGeneratedAudio(audioPtr);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LastError = "Synthesis exception: " + ex.Message;
+                        Debug.LogError("[PiperLocalTts] " + LastError);
+                        return default;
                     }
                     finally
                     {
-                        SherpaOnnxDestroyOfflineTtsGeneratedAudio(audioPtr);
+                        SherpaOnnxDestroyOfflineTts(handle);
                     }
                 }
             });
@@ -234,16 +332,6 @@ namespace Alterlife.Immersive
             lock (engineLock)
             {
                 Ready = false;
-                if (frenchHandle != IntPtr.Zero)
-                {
-                    try { SherpaOnnxDestroyOfflineTts(frenchHandle); } catch { }
-                    frenchHandle = IntPtr.Zero;
-                }
-                if (englishHandle != IntPtr.Zero)
-                {
-                    try { SherpaOnnxDestroyOfflineTts(englishHandle); } catch { }
-                    englishHandle = IntPtr.Zero;
-                }
             }
         }
 

@@ -101,9 +101,12 @@ namespace Alterlife.Immersive
             if (audioSource == null)
                 audioSource = GetComponent<AudioSource>();
 
-            if (cardOptionAControl != null) cardOptionAControl.pressed.AddListener(SelectCardA);
-            if (cardOptionBControl != null) cardOptionBControl.pressed.AddListener(SelectCardB);
-            if (cardOptionCControl != null) cardOptionCControl.pressed.AddListener(SelectCardC);
+            if (cardOptionAControl != null && cardOptionAControl.pressed.GetPersistentEventCount() == 0)
+                cardOptionAControl.pressed.AddListener(SelectCardA);
+            if (cardOptionBControl != null && cardOptionBControl.pressed.GetPersistentEventCount() == 0)
+                cardOptionBControl.pressed.AddListener(SelectCardB);
+            if (cardOptionCControl != null && cardOptionCControl.pressed.GetPersistentEventCount() == 0)
+                cardOptionCControl.pressed.AddListener(SelectCardC);
 
             SetState(CompanionState.Observing);
         }
@@ -191,12 +194,12 @@ namespace Alterlife.Immersive
                     }
                     else
                     {
-                        PositionFoxBesidePanel(yawRotation, new Vector3(-0.64f, 0.58f, -0.04f));
+                        PositionFoxBesidePanel(yawRotation, new Vector3(-0.56f, 0.06f, -0.04f));
                     }
                     break;
 
                 case CompanionState.RescueLevel2:
-                    PositionFoxBesidePanel(yawRotation, new Vector3(-0.64f, 0.15f, -0.05f));
+                    PositionFoxBesidePanel(yawRotation, new Vector3(-0.62f, 0.12f, -0.05f));
                     break;
 
                 case CompanionState.Celebrating:
@@ -219,7 +222,10 @@ namespace Alterlife.Immersive
             Vector3 foxTarget = hasRescueAnchor
                 ? rescueAnchorPos + (rescueAnchorRot * localOffset)
                 : headCamera.position + (yawRotation * new Vector3(-0.35f, -0.05f, 0.85f));
-            foxTarget.y += Mathf.Sin(Time.time * bobbingSpeed) * (bobbingAmplitude * 0.45f);
+            bool speaking = audioSource != null && audioSource.isPlaying;
+            float speedMult = speaking ? 2.4f : 1.0f;
+            float ampMult = speaking ? 0.85f : 0.45f;
+            foxTarget.y += Mathf.Sin(Time.time * bobbingSpeed * speedMult) * (bobbingAmplitude * ampMult);
             transform.position = Vector3.Lerp(transform.position, foxTarget, Time.deltaTime * (followDamping * 1.3f));
 
             Vector3 toUser = headCamera.position - transform.position;

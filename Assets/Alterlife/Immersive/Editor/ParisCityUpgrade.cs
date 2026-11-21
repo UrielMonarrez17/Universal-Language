@@ -21,16 +21,10 @@ namespace Alterlife.Immersive.Editor
         static System.Random random;
         static Mesh canopy;
 
-        // Rebuilds only this tool's generated decoration; gameplay and original imported hierarchy are retained.
+        // Delegates to the newer walkable street-level Parisian neighborhood builder (Blender Haussmann + Hybrid Bricktown).
         public static void Refine()
         {
-            var scene = EditorSceneManager.OpenScene(ParisPrototypeBuilder.ScenePath);
-            var authored = GameObject.Find("Paris Restaurant Prototype").transform;
-            foreach (string name in new[] { "Paris cityscape", "Cafe terrace detailing", "Cafe name lettering", "Paris sky clouds" })
-            { var child = authored.Find(name); if (child) Object.DestroyImmediate(child.gameObject); }
-            foreach (string path in Directory.GetFiles(Folder, "* mesh *.asset")) AssetDatabase.DeleteAsset(path.Replace('\\', '/'));
-            EditorSceneManager.SaveScene(scene);
-            Run();
+            ParisWalkableCityBuilder.BuildWalkableParis();
         }
 
         public static void Run()

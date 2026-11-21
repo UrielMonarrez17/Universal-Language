@@ -20,12 +20,16 @@ namespace Alterlife.Immersive
         public TMP_Text postureLabel;
         public XROrigin xrOrigin;
         public float seatedHeightOffset = 0.40f;
+        [Tooltip("Default locomotion mode when the player has not explicitly toggled Teleport in the wrist menu.")]
+        public bool defaultSmoothMovement = true;
 
         public bool IsSeatedMode { get; private set; }
         public bool IsSmoothMovementEnabled =>
             leftController != null
                 ? leftController.smoothMotionEnabled
-                : (PersistenceEnabled && PlayerPrefs.GetInt(SmoothMovePrefKey, 0) == 1);
+                : (PersistenceEnabled
+                    ? PlayerPrefs.GetInt(SmoothMovePrefKey, defaultSmoothMovement ? 1 : 0) == 1
+                    : defaultSmoothMovement);
 
         void Awake()
         {
@@ -66,7 +70,10 @@ namespace Alterlife.Immersive
             if (leftController == null)
                 return;
 
-            bool smooth = PersistenceEnabled && PlayerPrefs.GetInt(SmoothMovePrefKey, 0) == 1;
+            int defaultVal = defaultSmoothMovement ? 1 : 0;
+            bool smooth = PersistenceEnabled
+                ? PlayerPrefs.GetInt(SmoothMovePrefKey, defaultVal) == 1
+                : defaultSmoothMovement;
             leftController.smoothMotionEnabled = smooth;
         }
 

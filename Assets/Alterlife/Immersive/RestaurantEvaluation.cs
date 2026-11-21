@@ -72,6 +72,8 @@ namespace Alterlife.Immersive
         bool ready;
         bool usedLevel1ThisTurn;
         bool usedLevel2ThisTurn;
+        float lastCardTapTime = -10f;
+        int lastCardTapIdx = -1;
 
         void Awake()
         {
@@ -191,6 +193,9 @@ namespace Alterlife.Immersive
                 confirmationChallengeResolved = ConfirmationChallengeResolved,
                 orderServed = OrderServed,
                 isPracticeMode = Stage == RestaurantStage.Practice,
+                isExploringCity = voice != null && voice.IsExploringCity,
+                lastWaiterFrench = tutor.LastWaiterFrench,
+                lastWaiterEnglish = tutor.LastWaiterEnglish,
                 foxLevel2Visible = cardsOpen,
                 activeFoxOptions = GetCurrentContextualOptions(),
                 autonomousObjectives = AutonomousObjectives,
@@ -235,6 +240,22 @@ namespace Alterlife.Immersive
             {
                 SetPlayerTranscriptPlaceholder();
                 Feedback("Microphone active. Speak naturally in French or press Y for Fox help.");
+            }
+        }
+
+        public void NotifyExploringCity(bool exploring)
+        {
+            if (exploring)
+            {
+                if (helpCards != null) helpCards.SetActive(false);
+                if (playerTranscriptText != null)
+                    playerTranscriptText.text = "<size=72%><color=#7DD3FC>EXPLORING PARIS · FOX GUIDE</color></size>\n<color=#CBD5E1>Ask Fox anything in English, or walk back to the café</color>";
+                Feedback("Exploring Paris! Lucas is waiting at your table. Speak in English anytime to ask your Fox Guide.");
+            }
+            else
+            {
+                SetPlayerTranscriptPlaceholder();
+                Feedback("Back at Le Café de Paris! Speak naturally in French with Lucas, or ask Fox for help in English.");
             }
         }
 
@@ -320,18 +341,24 @@ namespace Alterlife.Immersive
             if (!string.IsNullOrWhiteSpace(turn.userTranscript))
                 UpdatePlayerTranscriptDisplay(turn.userTranscript, askedFox: isFoxTutor);
 
-            // 1. Fox Tutor Turn (Player asked a question in English or requested help)
+            // 1. Fox Tutor Turn (Player asked a question in English, requested help, or is exploring Paris with Fox Guide)
             if (isFoxTutor)
             {
-                usedLevel1ThisTurn = true;
-                Level1HintCount++;
+                bool exploring = voice != null && voice.IsExploringCity;
+                if (!exploring)
+                {
+                    usedLevel1ThisTurn = true;
+                    Level1HintCount++;
+                }
 
                 string replyEn = !string.IsNullOrWhiteSpace(turn.foxTutorReplyEnglish)
                     ? turn.foxTutorReplyEnglish.Trim()
-                    : "Try replying to Lucas in French — press Y if you'd like example phrases.";
+                    : tutor.BuildFallbackEnglishTutorReply(turn.userTranscript);
 
                 tutor.UpdateFromFoxTutorTurn(replyEn, turn.level1Keywords, turn.level1TipEnglish, turn.nextFoxOptions);
-                string formattedPanel = tutor.FormatTutorAnswerPanel(replyEn);
+                string formattedPanel = exploring
+                    ? tutor.FormatCityGuidePanel(replyEn)
+                    : tutor.FormatTutorAnswerPanel(replyEn);
 
                 if (companion != null)
                     companion.ShowHintPanel(formattedPanel);
@@ -339,8 +366,8 @@ namespace Alterlife.Immersive
                     Feedback(replyEn);
 
                 if (helpCards != null) helpCards.SetActive(false);
-                Feedback("Fox Tutor: " + replyEn);
-                voice?.SpeakAsFox(replyEn, isFrenchModelPhrase: false);
+                Feedback((exploring ? "Fox Guide: " : "Fox Tutor: ") + replyEn);
+                voice?.SpeakAsFox(replyEn, isFrenchModelPhrase: false, speed: 1.0f);
                 return;
             }
 
@@ -596,6 +623,10 @@ namespace Alterlife.Immersive
 
             if (helpCards != null) helpCards.SetActive(false);
             Feedback($"Fox Level 1 Hint · Lucas said: \"{tutor.LastWaiterEnglish}\" (Press Y again for 3 example phrases)");
+
+            string spokenLevel1 = tutor.BuildLevel1SpokenText();
+            if (!string.IsNullOrWhiteSpace(spokenLevel1))
+                voice?.SpeakAsFox(spokenLevel1, isFrenchModelPhrase: false, speed: 1.0f);
         }
 
         public void ShowFoxLevel2Cards()
@@ -638,11 +669,17 @@ namespace Alterlife.Immersive
             var options = GetCurrentContextualOptions();
             if (idx < 0 || idx >= options.Length) return;
 
+            // Guard against duplicate persistent + runtime pressed listeners firing in the same click
+            if (idx == lastCardTapIdx && Time.unscaledTime - lastCardTapTime < 0.15f)
+                return;
+            lastCardTapIdx = idx;
+            lastCardTapTime = Time.unscaledTime;
+
             usedLevel2ThisTurn = true;
             string phrase = options[idx].french;
-            voice?.SpeakAsFox(phrase, isFrenchModelPhrase: true);
+            voice?.SpeakAsFox(phrase, isFrenchModelPhrase: true, speed: 0.85f);
 
-            string caption = $"Listen & repeat aloud: \"{phrase}\"\n<size=78%><color=#CBD5E1>{options[idx].englishDescription}</color></size>";
+            string caption = $"Listen & repeat aloud (0.85x): \"{phrase}\"\n<size=78%><color=#CBD5E1>{options[idx].englishDescription}</color></size>";
             if (companion != null) companion.SetHelpCaption(caption);
             Feedback($"Fox pronunciation: \"{phrase}\" — now say it (or your own variation) aloud to Lucas.");
         }

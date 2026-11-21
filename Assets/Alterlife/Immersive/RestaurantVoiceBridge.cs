@@ -58,6 +58,12 @@ namespace Alterlife.Immersive
         public AudioSource foxSpeaker;
         public TMP_Text microphoneLabel;
 
+        [Header("Paris City Exploration Proximity")]
+        [Tooltip("Center of the café terrace. Walking further than cafeLeaveRadius pauses Lucas and switches voice to Fox Paris Guide mode.")]
+        public Transform cafeAnchor;
+        [SerializeField] private float cafeLeaveRadius = 6.2f;
+        [SerializeField] private float cafeReturnRadius = 5.5f;
+
         // Legacy serialized field kept for scene YAML compatibility
         [HideInInspector] public string serviceUrl;
 
@@ -73,6 +79,7 @@ namespace Alterlife.Immersive
         public bool IsRecording { get; private set; }
         public bool IsBusy { get; private set; }
         public bool IsMicrophoneMuted { get; private set; }
+        public bool IsExploringCity { get; private set; }
         public int FilteredNoiseCount { get; private set; }
         public int DiskCacheHitCount { get; private set; }
         public int DiskCacheEntryCount => diskCacheIndex.Count;
@@ -88,7 +95,8 @@ namespace Alterlife.Immersive
 
         const int SampleRate = 16000;
         const int RingBufferSeconds = 20;
-        const int MaxCachedTtsClips = 64;
+        const int MaxCachedTtsClips = 12;
+        const int MaxHistoryEntries = 6;
         const string DiskCacheFolderName = "TtsCache";
 
         static readonly Color HudMicOnColor = new Color(0.06f, 0.14f, 0.20f, 0.82f);
@@ -114,6 +122,8 @@ namespace Alterlife.Immersive
         bool diskCacheInitialized;
 
         Coroutine speechRoutine;
+        Coroutine vadBootstrapRoutine;
+        Coroutine requestRoutine;
         UnityWebRequest speechRequest;
         UnityWebRequest operationRequest;
         PiperLocalTts piperTts;
@@ -215,17 +225,36 @@ namespace Alterlife.Immersive
             if (npcPersonality == null)
                 npcPersonality = FindAnyObjectByType<NPCPersonality>();
             ResolveFoxSpeaker();
+            ResolveCafeAnchor();
             InitializeDiskCacheIndex();
             RefreshHudMicVisual();
             EnsurePiperStarted();
+        }
+
+        void ResolveCafeAnchor()
+        {
+            if (cafeAnchor != null) return;
+            var table = GameObject.Find("Your table");
+            if (table != null)
+            {
+                cafeAnchor = table.transform;
+                return;
+            }
+            if (evaluation != null && evaluation.menu != null)
+            {
+                cafeAnchor = evaluation.menu;
+                return;
+            }
+            if (speaker != null)
+                cafeAnchor = speaker.transform;
         }
 
         void EnsurePiperStarted()
         {
             if (piperTts == null)
                 piperTts = new PiperLocalTts();
-            if (!piperTts.Ready && !piperTts.IsInitializing && isActiveAndEnabled && gameObject.activeInHierarchy)
-                StartCoroutine(piperTts.Prepare());
+            if (!piperTts.Ready && !piperTts.IsInitializing && !Application.isBatchMode)
+                piperTts.BeginPrepareNonBlocking();
         }
 
         /// <summary>
@@ -384,6 +413,15 @@ namespace Alterlife.Immersive
         {
             if (foxSpeaker == null && evaluation != null && evaluation.companion != null)
                 foxSpeaker = evaluation.companion.AudioSource;
+
+            if (foxSpeaker != null)
+            {
+                foxSpeaker.mute = false;
+                foxSpeaker.volume = 1f;
+                foxSpeaker.spatialBlend = 0.65f;
+                foxSpeaker.minDistance = 1.2f;
+                foxSpeaker.maxDistance = 12f;
+            }
         }
 
         public void SeedWaiterOpening(string openingFrench)
@@ -448,9 +486,12 @@ namespace Alterlife.Immersive
         {
             if (hudMicStatusLabel != null)
             {
-                hudMicStatusLabel.text = IsMicrophoneMuted
-                    ? "<color=#FCA5A5><b>MIC OFF</b></color> <size=78%><color=#E2E8F0>· Press B</color></size>"
-                    : "<color=#6EE7B7><b>● MIC ON</b></color> <size=78%><color=#CBD5E1>· Press B</color></size>";
+                if (IsMicrophoneMuted)
+                    hudMicStatusLabel.text = "<color=#FCA5A5><b>MIC OFF</b></color> <size=78%><color=#E2E8F0>· Press B</color></size>";
+                else if (IsExploringCity)
+                    hudMicStatusLabel.text = "<color=#7DD3FC><b>● FOX GUIDE</b></color> <size=78%><color=#CBD5E1>· Press B</color></size>";
+                else
+                    hudMicStatusLabel.text = "<color=#6EE7B7><b>● MIC ON</b></color> <size=78%><color=#CBD5E1>· Press B</color></size>";
             }
 
             if (hudMicStatusBacking != null)
@@ -463,6 +504,32 @@ namespace Alterlife.Immersive
                 hudPropBlock.SetColor("_Color", c);
                 hudMicStatusBacking.SetPropertyBlock(hudPropBlock);
             }
+        }
+
+        void UpdateCafeProximity()
+        {
+            Camera cam = Camera.main;
+            if (cam == null) return;
+            if (cafeAnchor == null) ResolveCafeAnchor();
+
+            Vector3 anchorPos = cafeAnchor != null ? cafeAnchor.position : new Vector3(0f, 0f, 0.1f);
+            Vector2 playerXZ = new Vector2(cam.transform.position.x, cam.transform.position.z);
+            Vector2 anchorXZ = new Vector2(anchorPos.x, anchorPos.z);
+            float dist = Vector2.Distance(playerXZ, anchorXZ);
+
+            bool nextExploring = IsExploringCity
+                ? dist > cafeReturnRadius
+                : dist > cafeLeaveRadius;
+
+            if (nextExploring == IsExploringCity)
+                return;
+
+            IsExploringCity = nextExploring;
+            if (IsExploringCity && speaker != null && speaker.isPlaying)
+                speaker.Stop();
+
+            RefreshHudMicVisual();
+            evaluation?.NotifyExploringCity(IsExploringCity);
         }
 
         // =====================================================================
@@ -631,6 +698,8 @@ namespace Alterlife.Immersive
             if (Application.isBatchMode || evaluation == null)
                 return;
 
+            UpdateCafeProximity();
+
             if (!HasGeminiKey)
             {
                 SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "NO GEMINI API KEY");
@@ -651,7 +720,8 @@ namespace Alterlife.Immersive
                 return;
             }
 
-            if (IsBusy || anyTalking || evaluation.Stage == RestaurantStage.Complete)
+            bool examEndedInsideCafe = evaluation.Stage == RestaurantStage.Complete && !IsExploringCity;
+            if (IsBusy || anyTalking || examEndedInsideCafe)
             {
                 if (IsBusy) SetLabel("● THINKING...");
                 else if (foxSpeaker != null && foxSpeaker.isPlaying) SetLabel("● FOX SPEAKING");
@@ -674,7 +744,7 @@ namespace Alterlife.Immersive
                     micPermissionDenied = false;
 #endif
                 if (!micBootstrapped && !micPermissionDenied && Time.realtimeSinceStartup >= nextMicAttempt)
-                    StartCoroutine(EnsureMicrophoneRingRunning());
+                    vadBootstrapRoutine = StartCoroutine(EnsureMicrophoneRingRunning());
                 return;
             }
 
@@ -711,7 +781,7 @@ namespace Alterlife.Immersive
 
             if (!isCapturingUtterance)
             {
-                SetLabel("● LISTENING (FR)");
+                SetLabel(IsExploringCity ? "● FOX GUIDE" : "● LISTENING (FR)");
                 if (rms >= dynamicStartThreshold)
                 {
                     speechStartAccum += dt;
@@ -757,14 +827,14 @@ namespace Alterlife.Immersive
                     {
                         FilteredNoiseCount++;
                         Debug.Log("[ParisVoice] Filtered ambient noise/transient — saved 1 Gemini API call.");
-                        SetLabel("● LISTENING (FR)");
+                        SetLabel(IsExploringCity ? "● FOX GUIDE" : "● LISTENING (FR)");
                         evaluation?.NotifyNoiseFiltered();
                         return;
                     }
 
                     byte[] wav = EncodeWav(pcm, micRingClip.channels, micRingClip.frequency);
                     evaluation?.NotifyPlayerThinking();
-                    StartCoroutine(SendPayloadToGemini(wav, null));
+                    requestRoutine = StartCoroutine(SendPayloadToGemini(wav, null));
                 }
             }
         }
@@ -804,7 +874,7 @@ namespace Alterlife.Immersive
                 return;
             }
             if (!micBootstrapped)
-                StartCoroutine(EnsureMicrophoneRingRunning());
+                vadBootstrapRoutine = StartCoroutine(EnsureMicrophoneRingRunning());
         }
 
         public void SubmitTextToGemini(string userPhrase)
@@ -833,7 +903,7 @@ namespace Alterlife.Immersive
                 return;
 
             evaluation?.NotifyPlayerThinking();
-            StartCoroutine(SendPayloadToGemini(null, userPhrase));
+            requestRoutine = StartCoroutine(SendPayloadToGemini(null, userPhrase));
         }
 
         IEnumerator SendPayloadToGemini(byte[] wavBytes, string textInput)
@@ -862,9 +932,19 @@ namespace Alterlife.Immersive
                 : "You are Lucas Moreau, a Parisian waiter speaking natural A2/B1 French, and a Fox tutor speaking English. Reply ONLY in JSON.";
 
             string historySummary = BuildHistoryText();
-            string userInstruction = wavBytes != null
-                ? "Listen carefully to the player's audio clip (even if it is a single French word like 'Oui', 'Non', 'Café', 'Plate'). Transcribe what they said, note any helpful pronunciation/phonetic feedback in feedbackEnglish, decide speakerMode ('waiter' for French conversation with Lucas, 'fox_tutor' for English help/translation/vocabulary questions or purely English replies), evaluate any newly fulfilled milestones, and respond naturally."
-                : $"The player said: \"{textInput}\". Decide speakerMode, evaluate any newly fulfilled milestones, and respond naturally.";
+            string userInstruction;
+            if (promptContext.isExploringCity)
+            {
+                userInstruction = wavBytes != null
+                    ? "The player is strolling around Paris away from the café. Transcribe their audio accurately, set speakerMode=\"fox_tutor\", and answer warmly in English in foxTutorReplyEnglish as their Paris Tour Guide & French Tutor."
+                    : $"The player is strolling around Paris and said: \"{textInput}\". Set speakerMode=\"fox_tutor\" and answer warmly in English in foxTutorReplyEnglish as their Paris Tour Guide & French Tutor.";
+            }
+            else
+            {
+                userInstruction = wavBytes != null
+                    ? "Listen carefully to the player's audio clip (even a single French word like 'Oui', 'Non', 'Café', 'Plate', OR an English question). Transcribe accurately in userTranscript. PRIORITY ROUTING: If the player speaks in English, asks what the waiter/Lucas said, asks for a translation/explanation/meaning/help, or mixes French words into an English question (e.g. 'What did the waiter say?', 'What does quiche mean?', 'Can you explain?'), set speakerMode=\"fox_tutor\" and directly answer their question in English in foxTutorReplyEnglish. Otherwise, if they are speaking French to Lucas, set speakerMode=\"waiter\" and reply in natural French."
+                    : $"The player said: \"{textInput}\". PRIORITY ROUTING: If this is in English or asks what the waiter said / for translation / explanation / help (even with French words mixed in), set speakerMode=\"fox_tutor\" and directly answer in English in foxTutorReplyEnglish; otherwise if it is French for Lucas, set speakerMode=\"waiter\".";
+            }
 
             string partsJson;
             if (wavBytes != null)
@@ -929,6 +1009,7 @@ namespace Alterlife.Immersive
             }
 
             IsBusy = false;
+            requestRoutine = null;
 
             if (string.IsNullOrWhiteSpace(responseBody))
             {
@@ -947,21 +1028,47 @@ namespace Alterlife.Immersive
                 yield break;
             }
 
+            string effectiveTranscript = !string.IsNullOrWhiteSpace(turn.userTranscript)
+                ? turn.userTranscript.Trim()
+                : (textInput ?? "");
+
             bool isTutor = string.Equals(turn.speakerMode, "fox_tutor", StringComparison.OrdinalIgnoreCase);
+
+            // Deterministic C# safety net: never let Lucas hijack an explicit English question or a city-guide stroll
+            if (!isTutor && (promptContext.isExploringCity || RestaurantTutor.IsDefinitelyEnglishForFox(effectiveTranscript)))
+            {
+                Debug.Log($"[ParisVoice] Overriding speakerMode to fox_tutor for transcript: \"{effectiveTranscript}\"");
+                turn.speakerMode = "fox_tutor";
+                isTutor = true;
+                turn.newlyCompletedMilestones = Array.Empty<string>();
+                turn.npcReplyFrench = "";
+                turn.npcReplyEnglish = "";
+            }
+
+            if (isTutor && string.IsNullOrWhiteSpace(turn.foxTutorReplyEnglish))
+            {
+                if (!string.IsNullOrWhiteSpace(turn.feedbackEnglish))
+                    turn.foxTutorReplyEnglish = turn.feedbackEnglish.Trim();
+                else if (evaluation != null && evaluation.Tutor != null)
+                    turn.foxTutorReplyEnglish = evaluation.Tutor.BuildFallbackEnglishTutorReply(effectiveTranscript);
+                else
+                    turn.foxTutorReplyEnglish = "Try speaking a short phrase in French to Lucas, or press Y for phrase cards.";
+            }
+
             bool hasReply = isTutor
                 ? !string.IsNullOrWhiteSpace(turn.foxTutorReplyEnglish)
                 : !string.IsNullOrWhiteSpace(turn.npcReplyFrench);
 
             if (!hasReply)
             {
-                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "● LISTENING (FR)");
+                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : (IsExploringCity ? "● FOX GUIDE READY" : "● LISTENING (FR)"));
                 evaluation.Feedback("I could not hear clear speech. Please try speaking again.");
                 ResetVadCapture();
                 yield break;
             }
 
             ApplyParsedTurn(turn, textInput);
-            SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "● LISTENING (FR)");
+            SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : (IsExploringCity ? "● FOX GUIDE READY" : "● LISTENING (FR)"));
             ResetVadCapture();
         }
 
@@ -1014,8 +1121,8 @@ namespace Alterlife.Immersive
         void RecordHistory(string who, string content)
         {
             history.Add(new HistoryEntry { speaker = who, content = content });
-            if (history.Count > 18)
-                history.RemoveRange(0, history.Count - 18);
+            if (history.Count > MaxHistoryEntries)
+                history.RemoveRange(0, history.Count - MaxHistoryEntries);
         }
 
         public static GeminiWaiterTurn ParseGeminiTurn(string rawBody)
@@ -1087,9 +1194,10 @@ namespace Alterlife.Immersive
         /// Speaks using the Fox Companion's 100% local Piper neural TTS (fr_FR-siwis-medium for French,
         /// en_US-amy-low for English) with RAM + persistent disk caching — 0 Gemini API calls!
         /// </summary>
-        public void SpeakAsFox(string text, bool isFrenchModelPhrase)
+        public void SpeakAsFox(string text, bool isFrenchModelPhrase, float speed = -1f)
         {
-            if (string.IsNullOrWhiteSpace(text))
+            string cleanText = RestaurantTutor.SanitizeForPiperSpeech(text);
+            if (string.IsNullOrWhiteSpace(cleanText))
                 return;
 
             ResolveFoxSpeaker();
@@ -1097,11 +1205,13 @@ namespace Alterlife.Immersive
             if (target == null)
                 return;
 
-            string voiceTag = isFrenchModelPhrase ? "piper_fr_siwis" : "piper_en_amy";
+            float resolvedSpeed = speed > 0f ? speed : (isFrenchModelPhrase ? 0.85f : 1.0f);
+            int speedTag = Mathf.RoundToInt(resolvedSpeed * 100f);
+            string voiceTag = isFrenchModelPhrase ? $"piper_fr_siwis_{speedTag}" : $"piper_en_amy_{speedTag}";
             StopAllSpeech();
 
             // 1. Check 0ms RAM Cache + ~2ms Persistent Disk Cache first
-            if (TryLoadCachedClip(voiceTag, text, out AudioClip cachedClip))
+            if (TryLoadCachedClip(voiceTag, cleanText, out AudioClip cachedClip))
             {
                 target.clip = cachedClip;
                 target.Play();
@@ -1112,11 +1222,11 @@ namespace Alterlife.Immersive
                 return;
 
             EnsurePiperStarted();
-            string hash = ComputeTtsCacheHash(voiceTag, text);
-            speechRoutine = StartCoroutine(SynthesizeWithLocalPiper(target, hash, text.Trim(), isFrenchModelPhrase));
+            string hash = ComputeTtsCacheHash(voiceTag, cleanText);
+            speechRoutine = StartCoroutine(SynthesizeWithLocalPiper(target, hash, cleanText, isFrenchModelPhrase, resolvedSpeed));
         }
 
-        IEnumerator SynthesizeWithLocalPiper(AudioSource target, string cacheHash, string text, bool isFrench)
+        IEnumerator SynthesizeWithLocalPiper(AudioSource target, string cacheHash, string text, bool isFrench, float speed)
         {
             isSynthesizingSpeech = true;
 
@@ -1125,32 +1235,45 @@ namespace Alterlife.Immersive
 
             if (!piperTts.Ready)
             {
-                if (!piperTts.IsInitializing)
+                piperTts.BeginPrepareNonBlocking();
+                float waitDeadline = Time.realtimeSinceStartup + 30f;
+                while (!piperTts.Ready && piperTts.IsInitializing && Time.realtimeSinceStartup < waitDeadline)
+                    yield return null;
+
+                if (!piperTts.Ready && !piperTts.IsInitializing)
                     yield return piperTts.Prepare();
-                else
-                    while (piperTts.IsInitializing) yield return null;
             }
 
             if (!piperTts.Ready || target == null)
             {
+                Debug.LogWarning("[ParisVoice] Local Piper TTS unavailable for Fox speech: " + (piperTts != null ? piperTts.LastError : "null"));
                 isSynthesizingSpeech = false;
                 speechRoutine = null;
                 yield break;
             }
 
-            Task<PiperLocalTts.AudioResult> synthTask = piperTts.SynthesizeAsync(text, isFrench, speed: 1.0f);
+            Task<PiperLocalTts.AudioResult> synthTask = piperTts.SynthesizeAsync(text, isFrench, speed: speed);
             while (!synthTask.IsCompleted)
                 yield return null;
 
             isSynthesizingSpeech = false;
             speechRoutine = null;
 
-            if (synthTask.IsFaulted || target == null)
+            if (synthTask.IsFaulted)
+            {
+                Debug.LogError("[ParisVoice] Local Piper synthesis faulted: " + synthTask.Exception);
+                yield break;
+            }
+
+            if (target == null)
                 yield break;
 
             PiperLocalTts.AudioResult res = synthTask.Result;
             if (res.samples == null || res.samples.Length == 0 || res.sampleRate <= 0)
+            {
+                Debug.LogWarning("[ParisVoice] Local Piper returned empty audio for Fox: " + piperTts.LastError);
                 yield break;
+            }
 
             var clip = AudioClip.Create(isFrench ? "PiperFox_Siwis_FR" : "PiperFox_Amy_EN", res.samples.Length, 1, res.sampleRate, false);
             clip.SetData(res.samples, 0);
@@ -1400,8 +1523,17 @@ namespace Alterlife.Immersive
                 operationRequest.Dispose();
                 operationRequest = null;
             }
+            if (requestRoutine != null)
+            {
+                StopCoroutine(requestRoutine);
+                requestRoutine = null;
+            }
+            if (vadBootstrapRoutine != null)
+            {
+                StopCoroutine(vadBootstrapRoutine);
+                vadBootstrapRoutine = null;
+            }
             StopAllSpeech();
-            StopAllCoroutines();
 
             if (micRingClip) Destroy(micRingClip);
             micRingClip = null;
@@ -1423,7 +1555,7 @@ namespace Alterlife.Immersive
             if (autoListenVad && isActiveAndEnabled && gameObject.activeInHierarchy)
             {
                 SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "STARTING MICROPHONE");
-                StartCoroutine(EnsureMicrophoneRingRunning());
+                vadBootstrapRoutine = StartCoroutine(EnsureMicrophoneRingRunning());
             }
             else
             {
@@ -1443,8 +1575,17 @@ namespace Alterlife.Immersive
                 operationRequest.Dispose();
                 operationRequest = null;
             }
+            if (requestRoutine != null)
+            {
+                StopCoroutine(requestRoutine);
+                requestRoutine = null;
+            }
+            if (vadBootstrapRoutine != null)
+            {
+                StopCoroutine(vadBootstrapRoutine);
+                vadBootstrapRoutine = null;
+            }
             StopAllSpeech();
-            StopAllCoroutines();
             if (micRingClip) Destroy(micRingClip);
             micRingClip = null;
         }
