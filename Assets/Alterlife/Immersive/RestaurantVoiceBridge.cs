@@ -18,8 +18,10 @@ namespace Alterlife.Immersive
     /// Hybrid AI Voice & Audio Bridge for Le Café de Paris:
     /// - Waiter (Lucas Moreau): Gemini Multimodal Audio-In + Gemini TTS ('Puck') backed by a 0-latency
     ///   RAM + Persistent Disk TTS Cache (Application.persistentDataPath/TtsCache).
-    /// - Fox Companion Tutor: 100% On-Device Piper Neural TTS via Sherpa-ONNX (fr_FR-siwis-medium for French
-    ///   pronunciation cards + en_US-amy-low for English tutor answers) — 0 API calls.
+    /// - Fox Companion Tutor: Alibaba Cloud Model Studio (DashScope Singapore / ap-southeast-1) TTS
+    ///   using 'qwen3-tts-flash' (voice 'Cherry') with automatic quota/error failover across the
+    ///   Qwen TTS family and Sambert family, backed by RAM + Persistent Disk WAV Caching.
+    ///   If all Alibaba models exhaust quota or fail, the Fox displays its visual text panels silently.
     /// - Local C# Acoustic Human-Speech Filter: allows short single-word replies ('Oui', 'Non', 'Café')
     ///   while rejecting clicks, bumps, breaths, and ambient noise before calling Gemini.
     /// - Right Controller B Button: instant Mic Mute/Unmute toggle (cancelling any mid-sentence capture)
@@ -32,6 +34,16 @@ namespace Alterlife.Immersive
         [SerializeField] private string geminiApiKeyOverride;
         [SerializeField] private string geminiChatModel = "gemini-3.5-flash-lite";
         [SerializeField] private string geminiTtsModel = "gemini-3.8-flash-lite-tts";
+
+        [Header("Alibaba Cloud Model Studio (Fox Companion TTS — Singapore / ap-southeast-1)")]
+        [Tooltip("Optional Inspector override; if blank, loads from Resources/AlibabaLocalKey (git-ignored).")]
+        [SerializeField] private string alibabaApiKeyOverride;
+        [Tooltip("Optional Model Studio sub-workspace ID. Leave blank to use dashscope-intl.aliyuncs.com.")]
+        [SerializeField] private string alibabaWorkspaceId;
+        [Tooltip("Primary Alibaba TTS model; automatically fails over through Qwen TTS and Sambert backups on quota exhaustion.")]
+        [SerializeField] private string alibabaPrimaryModel = AlibabaTtsClient.DefaultPrimaryModel;
+        [Tooltip("Alibaba Qwen TTS voice persona for the Fox companion (e.g. Cherry, Serena, Ethan, Chelsie).")]
+        [SerializeField] private string alibabaFoxVoice = AlibabaTtsClient.DefaultVoice;
 
         static readonly string[] ChatFallbackModels = { "gemini-3.6-flash", "gemini-3.8-flash" };
         static readonly string[] TtsFallbackModels = { "gemini-3.8-flash-tts", "gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview", "gemini-2.5-pro-preview-tts" };
@@ -70,10 +82,14 @@ namespace Alterlife.Immersive
         /// <summary>Disables live Gemini HTTP calls during automated Editor tests.</summary>
         public static bool DisableGeminiForTests;
 
+        /// <summary>Disables live Alibaba Cloud TTS HTTP/WebSocket calls during automated Editor tests.</summary>
+        public static bool DisableAlibabaForTests;
+
         /// <summary>Optional deterministic handler used exclusively by automated Play Mode tests.</summary>
         public static Func<string, GeminiWaiterTurn> TestTurnHandler;
 
         public bool HasGeminiKey => !DisableGeminiForTests && !string.IsNullOrWhiteSpace(ResolveGeminiKey());
+        public bool HasAlibabaKey => !DisableAlibabaForTests && !string.IsNullOrWhiteSpace(ResolveAlibabaKey());
         public bool IsConfigured => HasGeminiKey;
         public bool IsAiReady => HasGeminiKey || TestTurnHandler != null;
         public bool IsRecording { get; private set; }
@@ -83,14 +99,18 @@ namespace Alterlife.Immersive
         public int FilteredNoiseCount { get; private set; }
         public int DiskCacheHitCount { get; private set; }
         public int DiskCacheEntryCount => diskCacheIndex.Count;
-        public bool IsPiperReady => piperTts != null && piperTts.Ready;
+        public string ActiveAlibabaFoxModel => alibabaTts != null ? alibabaTts.ActiveModelId : "";
+        public bool IsFoxSynthesizing => isSynthesizingFoxSpeech;
+        public bool IsFoxSpeaking => foxSpeaker != null && foxSpeaker.isPlaying;
+        public string LastFoxVoiceError => alibabaTts != null ? alibabaTts.LastError : "";
         public bool IsAnyActorSpeaking =>
             isSynthesizingSpeech ||
+            isSynthesizingFoxSpeech ||
             (speaker != null && speaker.isPlaying) ||
             (foxSpeaker != null && foxSpeaker.isPlaying);
         public bool IsWaiterSpeaking => speaker != null && speaker.isPlaying;
         public bool IsPlayerSpeaking => isCapturingUtterance && !IsMicrophoneMuted;
-        public bool IsThinking => IsBusy || isSynthesizingSpeech;
+        public bool IsThinking => IsBusy || isSynthesizingSpeech || isSynthesizingFoxSpeech;
         public string LastTranscript { get; private set; }
 
         const int SampleRate = 16000;
@@ -116,8 +136,10 @@ namespace Alterlife.Immersive
         bool micBootstrapped;
         bool wasAnyActorSpeaking;
         bool isSynthesizingSpeech;
+        bool isSynthesizingFoxSpeech;
         bool wasRightBPressed;
         string cachedResourceKey;
+        string cachedAlibabaResourceKey;
         string diskCacheDir;
         bool diskCacheInitialized;
 
@@ -126,7 +148,7 @@ namespace Alterlife.Immersive
         Coroutine requestRoutine;
         UnityWebRequest speechRequest;
         UnityWebRequest operationRequest;
-        PiperLocalTts piperTts;
+        AlibabaTtsClient alibabaTts;
         MaterialPropertyBlock hudPropBlock;
 
         readonly List<HistoryEntry> history = new List<HistoryEntry>();
@@ -218,6 +240,7 @@ namespace Alterlife.Immersive
         {
             InitializeDiskCacheIndex();
             RefreshHudMicVisual();
+            CleanupLegacyKokoroFilesAsync();
         }
 
         void Start()
@@ -228,7 +251,6 @@ namespace Alterlife.Immersive
             ResolveCafeAnchor();
             InitializeDiskCacheIndex();
             RefreshHudMicVisual();
-            EnsurePiperStarted();
         }
 
         void ResolveCafeAnchor()
@@ -249,12 +271,26 @@ namespace Alterlife.Immersive
                 cafeAnchor = speaker.transform;
         }
 
-        void EnsurePiperStarted()
+        void CleanupLegacyKokoroFilesAsync()
         {
-            if (piperTts == null)
-                piperTts = new PiperLocalTts();
-            if (!piperTts.Ready && !piperTts.IsInitializing && !Application.isBatchMode)
-                piperTts.BeginPrepareNonBlocking();
+            string baseDir = Application.persistentDataPath;
+            if (string.IsNullOrEmpty(baseDir))
+                return;
+
+            Task.Run(() =>
+            {
+                string[] legacyFolders = { "kokoro-fox-v1_0", "KokoroTmp" };
+                for (int i = 0; i < legacyFolders.Length; i++)
+                {
+                    try
+                    {
+                        string path = Path.Combine(baseDir, legacyFolders[i]);
+                        if (Directory.Exists(path))
+                            Directory.Delete(path, recursive: true);
+                    }
+                    catch { }
+                }
+            });
         }
 
         /// <summary>
@@ -407,6 +443,20 @@ namespace Alterlife.Immersive
                 cachedResourceKey = keyAsset != null ? keyAsset.text.Trim() : "";
             }
             return cachedResourceKey;
+        }
+
+        string ResolveAlibabaKey()
+        {
+            string overrideKey = AlibabaTtsClient.NormalizeApiKey(alibabaApiKeyOverride);
+            if (!string.IsNullOrEmpty(overrideKey))
+                return overrideKey;
+
+            if (cachedAlibabaResourceKey == null)
+            {
+                var keyAsset = Resources.Load<TextAsset>("AlibabaLocalKey");
+                cachedAlibabaResourceKey = keyAsset != null ? AlibabaTtsClient.NormalizeApiKey(keyAsset.text) : "";
+            }
+            return cachedAlibabaResourceKey;
         }
 
         void ResolveFoxSpeaker()
@@ -694,6 +744,9 @@ namespace Alterlife.Immersive
         void Update()
         {
             PollRightControllerBButton();
+
+            if (evaluation != null && evaluation.companion != null)
+                evaluation.companion.SetVoiceActivity(isSynthesizingFoxSpeech, IsFoxSpeaking);
 
             if (Application.isBatchMode || evaluation == null)
                 return;
@@ -1158,7 +1211,7 @@ namespace Alterlife.Immersive
 
         // =====================================================================
         // Waiter Speech (Gemini TTS + RAM & Persistent Disk Cache)
-        // & Fox Speech (100% Local Piper TTS: fr_FR-siwis + en_US-amy)
+        // & Fox Speech (Alibaba Cloud Model Studio TTS: Qwen family -> Sambert backups)
         // =====================================================================
 
         public void Speak(string text, AudioClip prerecorded = null) => SpeakAsWaiter(text);
@@ -1191,12 +1244,14 @@ namespace Alterlife.Immersive
         }
 
         /// <summary>
-        /// Speaks using the Fox Companion's 100% local Piper neural TTS (fr_FR-siwis-medium for French,
-        /// en_US-amy-low for English) with RAM + persistent disk caching — 0 Gemini API calls!
+        /// Speaks using the Fox Companion's Alibaba Cloud Model Studio TTS (Singapore / ap-southeast-1):
+        /// starts with 'qwen3-tts-flash' (voice 'Cherry') and fails over through Qwen TTS and Sambert
+        /// backup models on quota exhaustion, backed by RAM + persistent disk WAV caching.
+        /// Strictly Alibaba-only: if all models fail or no key is configured, Fox displays text panels silently.
         /// </summary>
         public void SpeakAsFox(string text, bool isFrenchModelPhrase, float speed = -1f)
         {
-            string cleanText = RestaurantTutor.SanitizeForPiperSpeech(text);
+            string cleanText = RestaurantTutor.SanitizeForLocalSpeech(text);
             if (string.IsNullOrWhiteSpace(cleanText))
                 return;
 
@@ -1205,12 +1260,19 @@ namespace Alterlife.Immersive
             if (target == null)
                 return;
 
+            string resolvedVoice = !string.IsNullOrWhiteSpace(alibabaFoxVoice)
+                ? alibabaFoxVoice.Trim()
+                : (npcPersonality != null && !string.IsNullOrWhiteSpace(npcPersonality.foxVoiceName)
+                    ? npcPersonality.foxVoiceName.Trim()
+                    : AlibabaTtsClient.DefaultVoice);
+
             float resolvedSpeed = speed > 0f ? speed : (isFrenchModelPhrase ? 0.85f : 1.0f);
             int speedTag = Mathf.RoundToInt(resolvedSpeed * 100f);
-            string voiceTag = isFrenchModelPhrase ? $"piper_fr_siwis_{speedTag}" : $"piper_en_amy_{speedTag}";
+            string langTag = isFrenchModelPhrase ? "fr" : "en";
+            string voiceTag = $"alibaba_{resolvedVoice.ToLowerInvariant()}_{langTag}_{speedTag}";
             StopAllSpeech();
 
-            // 1. Check 0ms RAM Cache + ~2ms Persistent Disk Cache first
+            // 1. Check 0ms RAM Cache + ~2ms Persistent Disk Cache first (0 API calls!)
             if (TryLoadCachedClip(voiceTag, cleanText, out AudioClip cachedClip))
             {
                 target.clip = cachedClip;
@@ -1218,71 +1280,56 @@ namespace Alterlife.Immersive
                 return;
             }
 
-            if (Application.isBatchMode)
+            if (Application.isBatchMode || !HasAlibabaKey)
                 return;
 
-            EnsurePiperStarted();
+            if (Application.internetReachability == NetworkReachability.NotReachable)
+                return;
+
             string hash = ComputeTtsCacheHash(voiceTag, cleanText);
-            speechRoutine = StartCoroutine(SynthesizeWithLocalPiper(target, hash, cleanText, isFrenchModelPhrase, resolvedSpeed));
+            speechRoutine = StartCoroutine(SynthesizeWithAlibabaTts(target, hash, cleanText, resolvedVoice, isFrenchModelPhrase, resolvedSpeed));
         }
 
-        IEnumerator SynthesizeWithLocalPiper(AudioSource target, string cacheHash, string text, bool isFrench, float speed)
+        IEnumerator SynthesizeWithAlibabaTts(AudioSource target, string cacheHash, string text, string voiceName, bool isFrench, float speed)
         {
-            isSynthesizingSpeech = true;
-
-            if (piperTts == null)
-                piperTts = new PiperLocalTts();
-
-            if (!piperTts.Ready)
-            {
-                piperTts.BeginPrepareNonBlocking();
-                float waitDeadline = Time.realtimeSinceStartup + 30f;
-                while (!piperTts.Ready && piperTts.IsInitializing && Time.realtimeSinceStartup < waitDeadline)
-                    yield return null;
-
-                if (!piperTts.Ready && !piperTts.IsInitializing)
-                    yield return piperTts.Prepare();
-            }
-
-            if (!piperTts.Ready || target == null)
-            {
-                Debug.LogWarning("[ParisVoice] Local Piper TTS unavailable for Fox speech: " + (piperTts != null ? piperTts.LastError : "null"));
-                isSynthesizingSpeech = false;
-                speechRoutine = null;
+            string apiKey = ResolveAlibabaKey();
+            if (string.IsNullOrWhiteSpace(apiKey) || target == null)
                 yield break;
-            }
 
-            Task<PiperLocalTts.AudioResult> synthTask = piperTts.SynthesizeAsync(text, isFrench, speed: speed);
-            while (!synthTask.IsCompleted)
-                yield return null;
+            isSynthesizingSpeech = true;
+            isSynthesizingFoxSpeech = true;
+
+            if (alibabaTts == null)
+                alibabaTts = new AlibabaTtsClient();
+
+            var result = new AlibabaTtsClient.SynthesisOutput();
+            yield return alibabaTts.SynthesizeWithFailover(
+                apiKey,
+                alibabaWorkspaceId,
+                alibabaPrimaryModel,
+                voiceName,
+                text,
+                isFrench,
+                speed,
+                result);
 
             isSynthesizingSpeech = false;
+            isSynthesizingFoxSpeech = false;
             speechRoutine = null;
 
-            if (synthTask.IsFaulted)
+            if (!result.Success || result.Clip == null || target == null)
             {
-                Debug.LogError("[ParisVoice] Local Piper synthesis faulted: " + synthTask.Exception);
+                // Strict Alibaba-only policy: do not fall back to Gemini or clutter the visual panels;
+                // the Fox smoothly stays silent while its hint/tutor/card panels remain readable.
                 yield break;
             }
 
-            if (target == null)
-                yield break;
+            CacheTtsClipInRam(cacheHash, result.Clip);
+            if (result.WavBytesForDiskCache != null && result.WavBytesForDiskCache.Length >= 44)
+                SaveWavToDiskCache(cacheHash, result.WavBytesForDiskCache);
 
-            PiperLocalTts.AudioResult res = synthTask.Result;
-            if (res.samples == null || res.samples.Length == 0 || res.sampleRate <= 0)
-            {
-                Debug.LogWarning("[ParisVoice] Local Piper returned empty audio for Fox: " + piperTts.LastError);
-                yield break;
-            }
-
-            var clip = AudioClip.Create(isFrench ? "PiperFox_Siwis_FR" : "PiperFox_Amy_EN", res.samples.Length, 1, res.sampleRate, false);
-            clip.SetData(res.samples, 0);
-            CacheTtsClipInRam(cacheHash, clip);
-
-            byte[] wavBytes = EncodeWav(res.samples, 1, res.sampleRate);
-            SaveWavToDiskCache(cacheHash, wavBytes);
-
-            target.clip = clip;
+            evaluation?.companion?.ShowVoiceDiagnostic("");
+            target.clip = result.Clip;
             target.Play();
         }
 
@@ -1290,6 +1337,7 @@ namespace Alterlife.Immersive
         {
             if (speaker != null) speaker.Stop();
             if (foxSpeaker != null) foxSpeaker.Stop();
+            alibabaTts?.CancelActiveRequest();
             if (speechRequest != null)
             {
                 speechRequest.Abort();
@@ -1302,6 +1350,7 @@ namespace Alterlife.Immersive
                 speechRoutine = null;
             }
             isSynthesizingSpeech = false;
+            isSynthesizingFoxSpeech = false;
         }
 
         IEnumerator SynthesizeWithGeminiTts(AudioSource target, string cacheHash, string voiceName, string verbatimText)
@@ -1541,7 +1590,6 @@ namespace Alterlife.Immersive
             LastTranscript = null;
             ResetVadCapture();
             RefreshHudMicVisual();
-            EnsurePiperStarted();
 
             if (Application.isBatchMode)
                 return;
@@ -1592,8 +1640,8 @@ namespace Alterlife.Immersive
 
         void OnDestroy()
         {
-            piperTts?.Dispose();
-            piperTts = null;
+            alibabaTts?.CancelActiveRequest();
+            alibabaTts = null;
             foreach (var kv in ttsCache)
                 if (kv.Value != null) Destroy(kv.Value);
             ttsCache.Clear();

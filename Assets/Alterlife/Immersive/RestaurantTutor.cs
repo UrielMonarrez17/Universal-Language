@@ -237,7 +237,7 @@ namespace Alterlife.Immersive
             return "Try replying to Lucas in French, or press Y to see example phrases you can practice.";
         }
 
-        public static string SanitizeForPiperSpeech(string text)
+        public static string SanitizeForLocalSpeech(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return "";
             string clean = Regex.Replace(text, "<.*?>", " ");

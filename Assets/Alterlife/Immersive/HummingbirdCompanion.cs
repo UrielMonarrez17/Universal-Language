@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.XR;
@@ -21,52 +22,50 @@ namespace Alterlife.Immersive
     }
 
     /// <summary>
-    /// Fox companion implementing Krashen's Low Affective Filter and on-demand 2-level scaffolded assistance.
-    /// Summoned on demand via Left Controller Y button, Wrist Menu, or spoken English tutor questions:
-    /// - Level 1: Floating minimalist English hint / translation / tutor answer panel beside the Fox.
-    /// - Level 2: Up to 3 dynamic bilingual French/English cards (tap with Trigger/Pinch to hear Fox pronunciation).
+    /// Clean, Quest-optimized Fox Companion controller for Le Café de Paris (and compatible pilot scenes):
+    /// - Rests unobtrusively in the player's lower-right periphery during Observing.
+    /// - Glides smoothly beside the left edge of the Level 1 Hint or Level 2 Rescue panel when open.
+    /// - Provides clear visual motion & glow cues while Alibaba Cloud TTS is thinking or speaking.
+    /// - Performs a smooth lightweight celebratory orbit upon milestone / exam success.
+    /// - Caches visual footprint ONCE at Awake (zero per-frame Renderer.bounds scans or allocations)
+    ///   and guards card controls against duplicate persistent + runtime UnityEvent invocations.
     /// </summary>
-    [DisallowMultipleComponent]
     public sealed class HummingbirdCompanion : MonoBehaviour
     {
-        [Header("Target Tracking (VR Comfort)")]
-        [Tooltip("The main XR Camera (head) to anchor relative comfort positioning.")]
+        [Header("Follow & Placement")]
         [SerializeField] private Transform headCamera;
-        [Tooltip("Local offset relative to head in Observing state: lower-right periphery out of central view.")]
         [SerializeField] private Vector3 shoulderOffset = new Vector3(0.48f, -0.38f, 0.72f);
-        [SerializeField] private float followDamping = 3.5f;
-        [SerializeField] private float rotationDamping = 4.0f;
+        [SerializeField] private float followDamping = 5f;
+        [SerializeField] private float rotationDamping = 4f;
         [SerializeField] private float bobbingSpeed = 2.5f;
-        [SerializeField] private float bobbingAmplitude = 0.035f;
+        [SerializeField] private float bobbingAmplitude = 0.04f;
 
-        [Header("Visual Feedback & Palette")]
+        [Header("Visual Feedback & Particles")]
         [SerializeField] private Color cyanHintColor = new Color(0.31f, 0.82f, 0.77f, 1f);
         [SerializeField] private Color goldCelebrationColor = new Color(0.92f, 0.70f, 0.03f, 1f);
         [SerializeField] private Light auraLight;
         [SerializeField] private ParticleSystem auraParticles;
         [SerializeField] private ParticleSystem goldCelebrationParticles;
 
-        [Header("Floating 3D Vocab Label (Legacy Prop Hint)")]
+        [Header("Legacy Pilot Vocab Label (ApartmentPilot compatibility)")]
         [SerializeField] private GameObject vocabLabelRoot;
-        [SerializeField] private TextMeshPro vocabLabelText;
+        [SerializeField] private TMP_Text vocabLabelText;
 
-        [Header("Floating Level 1 / Tutor Hint Panel")]
+        [Header("Paris Level 1 Hint & Fox Tutor Panel")]
         [SerializeField] private GameObject hintPanelRoot;
         [SerializeField] private TMP_Text hintPanelText;
 
-        [Header("Dialogue Cards Container (Level 2 Rescue - 3 Options)")]
+        [Header("Level 2 Dynamic Rescue Cards")]
         [SerializeField] private GameObject dialogueCardsRoot;
-        [SerializeField] private TextMeshPro cardOptionAText;
-        [SerializeField] private TextMeshPro cardOptionBText;
-        [SerializeField] private TextMeshPro cardOptionCText;
+        [SerializeField] private TMP_Text cardOptionAText;
+        [SerializeField] private TMP_Text cardOptionBText;
+        [SerializeField] private TMP_Text cardOptionCText;
         [SerializeField] private PhysicalControl cardOptionAControl;
         [SerializeField] private PhysicalControl cardOptionBControl;
         [SerializeField] private PhysicalControl cardOptionCControl;
 
-        [Header("Controller Shortcut")]
+        [Header("Input & Spatial Audio")]
         [SerializeField] private bool enableLeftYButtonSummon = true;
-
-        [Header("Audio Feedback")]
         [SerializeField] private AudioSource audioSource;
         [SerializeField] private AudioClip chirpHintClip;
         [SerializeField] private AudioClip celebrateClip;
@@ -75,372 +74,685 @@ namespace Alterlife.Immersive
         public bool IsShowingLevel1 => CurrentState == CompanionState.HintLevel1;
         public bool IsShowingHelp => CurrentState == CompanionState.RescueLevel2;
         public bool IsShowingAnyHelp => CurrentState == CompanionState.HintLevel1 || CurrentState == CompanionState.RescueLevel2;
-        public AudioSource AudioSource => audioSource != null ? audioSource : (audioSource = GetComponent<AudioSource>());
+        public AudioSource AudioSource => audioSource;
 
+        /// <summary>Raised when the player presses Left Controller Y to cycle Fox help.</summary>
         public event Action HelpRequestedByButton;
 
-        private Vector3 targetPosition;
-        private Quaternion targetRotation;
-        private Transform activeHintObject;
-        private Action onCardASelected;
-        private Action onCardBSelected;
-        private Action onCardCSelected;
-        private float stateTimer;
-        private bool wasLeftYPressed;
-        private Vector3 rescueAnchorPos;
-        private Quaternion rescueAnchorRot;
-        private bool hasRescueAnchor;
-        private Renderer[] foxRenderers;
+        static readonly Color ThinkingPulseColor = new Color(0.49f, 0.83f, 0.99f, 1f);
+        static readonly Color SpeakingGlowColor = new Color(0.20f, 0.83f, 0.60f, 1f);
+        static readonly Color ErrorTintColor = new Color(0.97f, 0.44f, 0.44f, 1f);
+        static readonly int EmissionColorId = Shader.PropertyToID("_EmissionColor");
 
-        private void Awake()
+        // Cached once in Awake — zero per-frame allocations or Renderer.bounds loops
+        readonly List<Renderer> foxMeshRenderers = new List<Renderer>(12);
+        MaterialPropertyBlock glowPropBlock;
+        Vector3 baseLocalScale = Vector3.one;
+        Vector3 cachedVisualCenterLocal = Vector3.zero;
+        float cachedVisualHalfWidth = 0.14f;
+        float cachedVisualHalfHeight = 0.14f;
+        float panelHalfWidthL1 = 0.36f;
+        float panelHalfWidthL2 = 0.46f;
+        bool footprintCached;
+
+        // Runtime panel / target / animation state
+        Transform level1WorldTarget;
+        Vector3 panelAnchorPos;
+        Quaternion panelAnchorRot = Quaternion.identity;
+        bool hasPanelAnchor;
+        string lastDiagnosticSuffix = "";
+        string baseCaptionText = "";
+
+        // Voice visual cues driven by RestaurantVoiceBridge (Alibaba Cloud TTS)
+        bool isVoiceThinking;
+        bool isVoiceSpeaking;
+        bool hasVoiceError;
+        float pulsePhase;
+
+        // Celebration lightweight orbit state
+        float celebrateElapsed;
+        const float CelebrateDuration = 2.4f;
+        Vector3 celebrateOriginPos;
+        Quaternion celebrateOriginRot = Quaternion.identity;
+
+        // Single-channel card callbacks (no duplicate persistent + runtime invocation)
+        Action<int> onIndexedCardSelected;
+        Action onLegacyCardASelected;
+        Action onLegacyCardBSelected;
+        bool cardControlAWired;
+        bool cardControlBWired;
+        bool cardControlCWired;
+        bool wasLeftYPressed;
+
+        void Awake()
         {
-            foxRenderers = GetComponentsInChildren<Renderer>(true);
-            if (headCamera == null && Camera.main != null)
-                headCamera = Camera.main.transform;
+            baseLocalScale = transform.localScale;
+            glowPropBlock = new MaterialPropertyBlock();
 
             if (audioSource == null)
                 audioSource = GetComponent<AudioSource>();
 
+            ConfigureSpatialAudio();
+            CacheVisualFootprintOnce();
+            WireCardControlsSafely();
+            HideAllPanels();
+        }
+
+        void Start()
+        {
+            ResolveCamera();
+            SnapToRestPose();
+        }
+
+        void OnDestroy()
+        {
+            if (cardControlAWired && cardOptionAControl != null)
+                cardOptionAControl.pressed.RemoveListener(HandleCardAPressed);
+            if (cardControlBWired && cardOptionBControl != null)
+                cardOptionBControl.pressed.RemoveListener(HandleCardBPressed);
+            if (cardControlCWired && cardOptionCControl != null)
+                cardOptionCControl.pressed.RemoveListener(HandleCardCPressed);
+        }
+
+        void ConfigureSpatialAudio()
+        {
+            if (audioSource == null) return;
+            audioSource.playOnAwake = false;
+            audioSource.loop = false;
+            audioSource.mute = false;
+            audioSource.volume = 1f;
+            audioSource.spatialBlend = 0.65f;
+            audioSource.minDistance = 1.2f;
+            audioSource.maxDistance = 12f;
+        }
+
+        void ResolveCamera()
+        {
+            if (headCamera != null) return;
+            Camera main = Camera.main;
+            if (main != null) headCamera = main.transform;
+        }
+
+        /// <summary>
+        /// Computes the Fox's local-space visual bounds ONCE at startup so runtime positioning
+        /// beside Level 1 / Level 2 panels is pure O(1) vector math with zero per-frame bounds queries.
+        /// </summary>
+        void CacheVisualFootprintOnce()
+        {
+            if (footprintCached) return;
+            footprintCached = true;
+
+            foxMeshRenderers.Clear();
+            Bounds worldBounds = default;
+            bool hasBounds = false;
+
+            var renderers = GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer r = renderers[i];
+                if (r == null) continue;
+                if (r is ParticleSystemRenderer) continue;
+                if (r.GetComponent<TMP_Text>() != null) continue;
+                if (hintPanelRoot != null && r.transform.IsChildOf(hintPanelRoot.transform)) continue;
+                if (dialogueCardsRoot != null && r.transform.IsChildOf(dialogueCardsRoot.transform)) continue;
+                if (vocabLabelRoot != null && r.transform.IsChildOf(vocabLabelRoot.transform)) continue;
+
+                foxMeshRenderers.Add(r);
+                if (!hasBounds)
+                {
+                    worldBounds = r.bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    worldBounds.Encapsulate(r.bounds);
+                }
+            }
+
+            if (hasBounds)
+            {
+                cachedVisualCenterLocal = transform.InverseTransformPoint(worldBounds.center);
+                cachedVisualHalfWidth = Mathf.Clamp(Mathf.Max(worldBounds.extents.x, worldBounds.extents.z), 0.08f, 0.28f);
+                cachedVisualHalfHeight = Mathf.Clamp(worldBounds.extents.y, 0.08f, 0.28f);
+            }
+
+            panelHalfWidthL1 = EstimatePanelHalfWidth(hintPanelRoot, 0.36f);
+            panelHalfWidthL2 = EstimatePanelHalfWidth(dialogueCardsRoot, 0.46f);
+        }
+
+        static float EstimatePanelHalfWidth(GameObject root, float fallback)
+        {
+            if (root == null) return fallback;
+            var mr = root.GetComponentInChildren<MeshRenderer>(true);
+            if (mr == null) return fallback;
+            float maxExtent = Mathf.Max(mr.bounds.extents.x, mr.bounds.extents.z);
+            return maxExtent > 0.08f ? Mathf.Clamp(maxExtent, 0.22f, 0.65f) : fallback;
+        }
+
+        /// <summary>
+        /// Only attaches runtime listeners when a PhysicalControl has NO persistent scene UnityEvent
+        /// (such as Paris.unity's UseAnswerA/B/C), eliminating double-firing completely.
+        /// </summary>
+        void WireCardControlsSafely()
+        {
             if (cardOptionAControl != null && cardOptionAControl.pressed.GetPersistentEventCount() == 0)
-                cardOptionAControl.pressed.AddListener(SelectCardA);
+            {
+                cardOptionAControl.pressed.AddListener(HandleCardAPressed);
+                cardControlAWired = true;
+            }
             if (cardOptionBControl != null && cardOptionBControl.pressed.GetPersistentEventCount() == 0)
-                cardOptionBControl.pressed.AddListener(SelectCardB);
+            {
+                cardOptionBControl.pressed.AddListener(HandleCardBPressed);
+                cardControlBWired = true;
+            }
             if (cardOptionCControl != null && cardOptionCControl.pressed.GetPersistentEventCount() == 0)
-                cardOptionCControl.pressed.AddListener(SelectCardC);
-
-            SetState(CompanionState.Observing);
+            {
+                cardOptionCControl.pressed.AddListener(HandleCardCPressed);
+                cardControlCWired = true;
+            }
         }
 
-        private void OnDestroy()
+        void HandleCardAPressed()
         {
-            if (cardOptionAControl != null) cardOptionAControl.pressed.RemoveListener(SelectCardA);
-            if (cardOptionBControl != null) cardOptionBControl.pressed.RemoveListener(SelectCardB);
-            if (cardOptionCControl != null) cardOptionCControl.pressed.RemoveListener(SelectCardC);
+            if (onIndexedCardSelected != null) onIndexedCardSelected.Invoke(0);
+            else onLegacyCardASelected?.Invoke();
         }
 
-        private void Update()
+        void HandleCardBPressed()
         {
-            if (headCamera == null && Camera.main != null)
-                headCamera = Camera.main.transform;
+            if (onIndexedCardSelected != null) onIndexedCardSelected.Invoke(1);
+            else onLegacyCardBSelected?.Invoke();
+        }
+
+        void HandleCardCPressed()
+        {
+            onIndexedCardSelected?.Invoke(2);
+        }
+
+        void SnapToRestPose()
+        {
+            if (headCamera == null) return;
+            ComputeRestPose(out Vector3 targetPos, out Quaternion targetRot);
+            transform.position = targetPos;
+            transform.rotation = targetRot;
+        }
+
+        void Update()
+        {
+            if (headCamera == null)
+            {
+                ResolveCamera();
+                if (headCamera == null) return;
+            }
 
             PollLeftControllerYButton();
-            UpdateMovement();
-            UpdateStateBehavior();
+            UpdatePoseAndMotion(Time.deltaTime);
+            UpdateVoiceVisualCues(Time.deltaTime);
         }
 
-        private void PollLeftControllerYButton()
+        void PollLeftControllerYButton()
         {
-            if (!enableLeftYButtonSummon)
-                return;
+            if (!enableLeftYButtonSummon) return;
 
-            InputDevice leftDevice = InputDevices.GetDeviceAtXRNode(XRNode.LeftHand);
-            if (!leftDevice.isValid)
+            InputDevice leftHand = InputDevices.GetDeviceAtXRNode(XRNode.LeftHand);
+            if (!leftHand.isValid)
             {
                 wasLeftYPressed = false;
                 return;
             }
 
-            bool yPressed = leftDevice.TryGetFeatureValue(CommonUsages.secondaryButton, out bool pressed) && pressed;
+            bool yPressed = leftHand.TryGetFeatureValue(CommonUsages.secondaryButton, out bool pressed) && pressed;
             if (yPressed && !wasLeftYPressed)
-            {
-                if (HelpRequestedByButton != null)
-                {
-                    HelpRequestedByButton.Invoke();
-                }
-                else
-                {
-                    var eval = FindAnyObjectByType<RestaurantEvaluation>();
-                    if (eval != null)
-                        eval.ToggleFoxHelp();
-                }
-            }
-
+                HelpRequestedByButton?.Invoke();
             wasLeftYPressed = yPressed;
         }
 
-        private void UpdateMovement()
+        void UpdatePoseAndMotion(float dt)
         {
-            if (headCamera == null) return;
+            float bobRate = isVoiceSpeaking ? bobbingSpeed * 1.9f : (isVoiceThinking ? bobbingSpeed * 1.4f : bobbingSpeed);
+            float bobAmp = isVoiceSpeaking ? bobbingAmplitude * 1.35f : (isVoiceThinking ? bobbingAmplitude * 0.85f : bobbingAmplitude);
+            pulsePhase += dt * bobRate;
+            float bobY = Mathf.Sin(pulsePhase) * bobAmp;
 
-            Vector3 forwardYaw = Vector3.ProjectOnPlane(headCamera.forward, Vector3.up).normalized;
-            if (forwardYaw.sqrMagnitude < 0.01f) forwardYaw = Vector3.forward;
-            Quaternion yawRotation = Quaternion.LookRotation(forwardYaw, Vector3.up);
+            Vector3 targetPos;
+            Quaternion targetRot;
 
             switch (CurrentState)
             {
-                case CompanionState.Observing:
-                    Vector3 desiredPosition = headCamera.position + (yawRotation * shoulderOffset);
-                    desiredPosition.y += Mathf.Sin(Time.time * bobbingSpeed) * bobbingAmplitude;
-
-                    targetPosition = Vector3.Lerp(transform.position, desiredPosition, Time.deltaTime * followDamping);
-                    targetRotation = Quaternion.Slerp(transform.rotation, yawRotation, Time.deltaTime * rotationDamping);
-
-                    transform.position = targetPosition;
-                    transform.rotation = targetRotation;
-                    break;
-
                 case CompanionState.HintLevel1:
-                    if (activeHintObject != null)
+                    if (level1WorldTarget != null && hintPanelRoot == null)
                     {
-                        Vector3 hintHoverPos = activeHintObject.position + Vector3.up * 0.28f;
-                        hintHoverPos.y += Mathf.Sin(Time.time * bobbingSpeed * 1.5f) * (bobbingAmplitude * 0.5f);
-                        transform.position = Vector3.Lerp(transform.position, hintHoverPos, Time.deltaTime * (followDamping * 1.5f));
-
-                        Vector3 toHead = headCamera.position - transform.position;
-                        if (toHead.sqrMagnitude > 0.01f)
-                        {
-                            transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(toHead, Vector3.up), Time.deltaTime * rotationDamping);
-                        }
+                        // ApartmentPilot world-object hint mode
+                        targetPos = level1WorldTarget.position + Vector3.up * (0.32f + bobY);
+                        targetRot = ComputeLookAtPlayerRotation(targetPos);
                     }
                     else
                     {
-                        PositionFoxBesidePanel(yawRotation, new Vector3(-0.56f, 0.06f, -0.04f));
+                        EnsurePanelAnchor();
+                        ComputeBesidePanelPose(panelHalfWidthL1, bobY, out targetPos, out targetRot);
+                        UpdateAnchoredPanelTransform(hintPanelRoot, 0f);
                     }
                     break;
 
                 case CompanionState.RescueLevel2:
-                    PositionFoxBesidePanel(yawRotation, new Vector3(-0.62f, 0.12f, -0.05f));
+                    EnsurePanelAnchor();
+                    ComputeBesidePanelPose(panelHalfWidthL2, bobY, out targetPos, out targetRot);
+                    UpdateAnchoredPanelTransform(dialogueCardsRoot, 0f);
+                    if (hintPanelRoot != null && hintPanelRoot.activeSelf)
+                        UpdateAnchoredPanelTransform(hintPanelRoot, 0.34f);
                     break;
 
                 case CompanionState.Celebrating:
-                    stateTimer += Time.deltaTime;
-                    float angle = stateTimer * 4.0f;
-                    Vector3 circleOffset = new Vector3(Mathf.Cos(angle) * 0.55f, 0.16f + Mathf.Sin(angle * 2.0f) * 0.08f, Mathf.Sin(angle) * 0.55f);
-                    transform.position = Vector3.Lerp(transform.position, headCamera.position + circleOffset, Time.deltaTime * 6f);
-                    Vector3 lookDir = headCamera.position - transform.position;
-                    if (lookDir.sqrMagnitude > 0.01f)
-                        transform.rotation = Quaternion.LookRotation(lookDir);
+                    celebrateElapsed += dt;
+                    float progress = Mathf.Clamp01(celebrateElapsed / CelebrateDuration);
+                    ComputeCelebrationOrbitPose(progress, bobY, out targetPos, out targetRot);
+                    if (celebrateElapsed >= CelebrateDuration)
+                    {
+                        CurrentState = CompanionState.Observing;
+                        ApplyAuraColor(cyanHintColor, 0.25f);
+                    }
+                    break;
 
-                    if (stateTimer >= 2.2f)
-                        SetState(CompanionState.Observing);
+                default: // Observing
+                    ComputeRestPose(out targetPos, out targetRot);
+                    targetPos.y += bobY;
                     break;
             }
+
+            float posLerp = 1f - Mathf.Exp(-Mathf.Max(1f, followDamping) * dt);
+            float rotLerp = 1f - Mathf.Exp(-Mathf.Max(1f, rotationDamping) * dt);
+            transform.position = Vector3.Lerp(transform.position, targetPos, posLerp);
+            transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotLerp);
         }
 
-        private void PositionFoxBesidePanel(Quaternion yawRotation, Vector3 localOffset)
+        void ComputeRestPose(out Vector3 pos, out Quaternion rot)
         {
-            Vector3 foxTarget = hasRescueAnchor
-                ? rescueAnchorPos + (rescueAnchorRot * localOffset)
-                : headCamera.position + (yawRotation * new Vector3(-0.35f, -0.05f, 0.85f));
-            bool speaking = audioSource != null && audioSource.isPlaying;
-            float speedMult = speaking ? 2.4f : 1.0f;
-            float ampMult = speaking ? 0.85f : 0.45f;
-            foxTarget.y += Mathf.Sin(Time.time * bobbingSpeed * speedMult) * (bobbingAmplitude * ampMult);
-            transform.position = Vector3.Lerp(transform.position, foxTarget, Time.deltaTime * (followDamping * 1.3f));
+            Vector3 flatForward = Vector3.ProjectOnPlane(headCamera.forward, Vector3.up);
+            if (flatForward.sqrMagnitude < 0.001f) flatForward = Vector3.forward;
+            flatForward.Normalize();
+            Vector3 flatRight = Vector3.Cross(Vector3.up, flatForward).normalized;
 
-            Vector3 toUser = headCamera.position - transform.position;
-            toUser.y = 0f;
-            if (toUser.sqrMagnitude > 0.01f)
+            pos = headCamera.position
+                + flatRight * shoulderOffset.x
+                + Vector3.up * shoulderOffset.y
+                + flatForward * shoulderOffset.z;
+
+            // Gentle lift when speaking in rest mode (e.g., Paris Guide or short cue)
+            if (isVoiceSpeaking || isVoiceThinking)
+                pos.y += 0.05f;
+
+            rot = ComputeLookAtPlayerRotation(pos);
+        }
+
+        void EnsurePanelAnchor()
+        {
+            if (hasPanelAnchor || headCamera == null) return;
+
+            Vector3 flatForward = Vector3.ProjectOnPlane(headCamera.forward, Vector3.up);
+            if (flatForward.sqrMagnitude < 0.001f) flatForward = Vector3.forward;
+            flatForward.Normalize();
+
+            panelAnchorPos = headCamera.position + flatForward * 1.18f + Vector3.up * -0.05f;
+            panelAnchorRot = Quaternion.LookRotation(flatForward, Vector3.up);
+            hasPanelAnchor = true;
+        }
+
+        void ComputeBesidePanelPose(float panelHalfWidth, float bobY, out Vector3 pos, out Quaternion rot)
+        {
+            Vector3 panelRight = panelAnchorRot * Vector3.right;
+            Vector3 panelForward = panelAnchorRot * Vector3.forward;
+
+            // Sit cleanly beside the left border of the active panel without overlapping text
+            float lateralClearance = panelHalfWidth + cachedVisualHalfWidth + 0.11f;
+            Vector3 desiredVisualCenter = panelAnchorPos
+                - panelRight * lateralClearance
+                + Vector3.up * (0.04f + bobY)
+                - panelForward * 0.04f;
+
+            rot = ComputeLookAtPlayerRotation(desiredVisualCenter);
+            Vector3 scaledLocalCenter = Vector3.Scale(cachedVisualCenterLocal, transform.localScale);
+            pos = desiredVisualCenter - (rot * scaledLocalCenter);
+        }
+
+        void UpdateAnchoredPanelTransform(GameObject panel, float verticalOffset)
+        {
+            if (panel == null || !hasPanelAnchor) return;
+            Transform tf = panel.transform;
+            if (tf.IsChildOf(transform)) return;
+
+            tf.position = panelAnchorPos + Vector3.up * verticalOffset;
+            tf.rotation = panelAnchorRot;
+        }
+
+        void ComputeCelebrationOrbitPose(float t, float bobY, out Vector3 pos, out Quaternion rot)
+        {
+            // Smooth, lightweight 180-degree celebratory arc across the upper-front periphery
+            float ease = Mathf.SmoothStep(0f, 1f, t);
+            float angle = Mathf.Lerp(-0.55f, 1.35f, ease) * Mathf.PI;
+            float radius = 0.78f;
+            float arcLift = Mathf.Sin(t * Mathf.PI) * 0.22f;
+
+            Vector3 forward = celebrateOriginRot * Vector3.forward;
+            Vector3 right = celebrateOriginRot * Vector3.right;
+
+            Vector3 orbitOffset = right * (Mathf.Cos(angle) * radius * 0.65f)
+                + forward * (0.85f + Mathf.Sin(angle) * 0.25f)
+                + Vector3.up * (-0.10f + arcLift + bobY);
+
+            pos = celebrateOriginPos + orbitOffset;
+            rot = ComputeLookAtPlayerRotation(pos);
+        }
+
+        Quaternion ComputeLookAtPlayerRotation(Vector3 fromPos)
+        {
+            Vector3 toHead = headCamera.position - fromPos;
+            toHead.y *= 0.35f; // gentle pitch toward player without awkward tilt
+            if (toHead.sqrMagnitude < 0.0001f)
+                return Quaternion.identity;
+            return Quaternion.LookRotation(toHead.normalized, Vector3.up);
+        }
+
+        void UpdateVoiceVisualCues(float dt)
+        {
+            // Subtle breathing scale pulse while Fox voice is synthesizing or speaking
+            float targetScaleFactor = 1f;
+            if (isVoiceSpeaking)
+                targetScaleFactor = 1f + 0.045f * (0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 10f));
+            else if (isVoiceThinking)
+                targetScaleFactor = 1f + 0.025f * (0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 5f));
+
+            Vector3 desiredScale = baseLocalScale * targetScaleFactor;
+            transform.localScale = Vector3.Lerp(transform.localScale, desiredScale, 1f - Mathf.Exp(-10f * dt));
+
+            if (CurrentState == CompanionState.Celebrating)
             {
-                transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(toUser, Vector3.up), Time.deltaTime * rotationDamping);
+                ApplyAuraColor(goldCelebrationColor, 0.9f);
             }
-
-            // The imported fox's pivot is offset from its visible geometry.
-            Bounds bounds = default;
-            bool found = false;
-            if (foxRenderers != null)
+            else if (hasVoiceError)
             {
-                foreach (var part in foxRenderers)
-                {
-                    if (!part || !part.enabled || !part.gameObject.activeInHierarchy ||
-                        (!(part is SkinnedMeshRenderer) && !(part is MeshRenderer)) || part.GetComponent<TMP_Text>()) continue;
-                    if (!found) { bounds = part.bounds; found = true; }
-                    else bounds.Encapsulate(part.bounds);
-                }
+                ApplyAuraColor(ErrorTintColor, 0.65f);
             }
-            if (found) transform.position += foxTarget - bounds.center;
-        }
-
-        private void UpdateStateBehavior()
-        {
-            if (vocabLabelRoot != null && vocabLabelRoot.activeSelf && headCamera != null)
+            else if (isVoiceSpeaking)
             {
-                Vector3 toHead = headCamera.position - vocabLabelRoot.transform.position;
-                if (toHead.sqrMagnitude > 0.001f)
-                {
-                    vocabLabelRoot.transform.rotation = Quaternion.LookRotation(-toHead, Vector3.up);
-                }
+                float glow = 0.55f + 0.35f * (0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 11f));
+                ApplyAuraColor(SpeakingGlowColor, glow);
             }
-
-            GameObject activeFloatingPanel =
-                (dialogueCardsRoot != null && dialogueCardsRoot.activeSelf) ? dialogueCardsRoot :
-                (hintPanelRoot != null && hintPanelRoot.activeSelf) ? hintPanelRoot : null;
-
-            if (activeFloatingPanel != null && headCamera != null)
+            else if (isVoiceThinking)
             {
-                if (!hasRescueAnchor || Vector3.Angle(headCamera.forward, rescueAnchorPos - headCamera.position) > 50f)
-                    CaptureRescueAnchor();
-
-                activeFloatingPanel.transform.position = Vector3.Lerp(
-                    activeFloatingPanel.transform.position,
-                    rescueAnchorPos,
-                    Time.deltaTime * 8f);
-                activeFloatingPanel.transform.rotation = Quaternion.Slerp(
-                    activeFloatingPanel.transform.rotation,
-                    rescueAnchorRot,
-                    Time.deltaTime * 8f);
+                float glow = 0.35f + 0.25f * (0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 5.5f));
+                ApplyAuraColor(ThinkingPulseColor, glow);
             }
-        }
-
-        private void CaptureRescueAnchor()
-        {
-            if (headCamera == null) return;
-            Vector3 forwardYaw = Vector3.ProjectOnPlane(headCamera.forward, Vector3.up).normalized;
-            if (forwardYaw.sqrMagnitude < 0.01f) forwardYaw = Vector3.forward;
-            rescueAnchorRot = Quaternion.LookRotation(forwardYaw, Vector3.up);
-            rescueAnchorPos = headCamera.position + forwardYaw * 0.98f + Vector3.down * 0.06f;
-            hasRescueAnchor = true;
-
-            if (dialogueCardsRoot != null && dialogueCardsRoot.activeSelf)
-                dialogueCardsRoot.transform.SetPositionAndRotation(rescueAnchorPos, rescueAnchorRot);
-            if (hintPanelRoot != null && hintPanelRoot.activeSelf)
-                hintPanelRoot.transform.SetPositionAndRotation(rescueAnchorPos, rescueAnchorRot);
-        }
-
-        public void ShowHintLevel1(Transform targetProp, string frenchWord)
-        {
-            activeHintObject = targetProp;
-            if (vocabLabelText != null) vocabLabelText.text = frenchWord;
-            SetState(CompanionState.HintLevel1);
-            PlaySound(chirpHintClip);
-        }
-
-        /// <summary>
-        /// Displays the minimalist Level 1 subtle hint or live Fox English tutor reply floating beside the Fox.
-        /// </summary>
-        public void ShowHintPanel(string formattedEnglishHint)
-        {
-            activeHintObject = null;
-            if (hintPanelText != null)
-                hintPanelText.text = formattedEnglishHint ?? "";
-
-            hasRescueAnchor = false;
-            SetState(CompanionState.HintLevel1);
-            CaptureRescueAnchor();
-            if (hasRescueAnchor)
+            else if (IsShowingAnyHelp)
             {
-                var target = rescueAnchorPos + rescueAnchorRot * new Vector3(-0.36f, 0.08f, -0.04f);
-                transform.position = target;
+                ApplyAuraColor(cyanHintColor, 0.45f);
             }
-            PlaySound(chirpHintClip);
-        }
-
-        public void ShowRescueLevel2(string phraseA, Action onSelectA, string phraseB, Action onSelectB)
-        {
-            ShowRescueOptions(
-                new[]
-                {
-                    new FoxHelpOption { french = phraseA, englishDescription = "Suggested polite response" },
-                    new FoxHelpOption { french = phraseB, englishDescription = "Alternative response" }
-                },
-                idx =>
-                {
-                    if (idx == 0) onSelectA?.Invoke();
-                    else if (idx == 1) onSelectB?.Invoke();
-                });
-        }
-
-        /// <summary>
-        /// Displays up to 3 dynamic bilingual French/English options floating comfortably in front of the player.
-        /// Tapping a card models pronunciation with the Fox's voice; the player speaks aloud to reply to Lucas.
-        /// </summary>
-        public void ShowRescueOptions(FoxHelpOption[] options, Action<int> onSelectOption)
-        {
-            if (options == null || options.Length == 0)
-                return;
-
-            activeHintObject = null;
-            onCardASelected = options.Length > 0 ? () => onSelectOption?.Invoke(0) : null;
-            onCardBSelected = options.Length > 1 ? () => onSelectOption?.Invoke(1) : null;
-            onCardCSelected = options.Length > 2 ? () => onSelectOption?.Invoke(2) : null;
-
-            ApplyCardVisual(cardOptionAControl, cardOptionAText, options.Length > 0 ? options[0] : default, options.Length > 0);
-            ApplyCardVisual(cardOptionBControl, cardOptionBText, options.Length > 1 ? options[1] : default, options.Length > 1);
-            ApplyCardVisual(cardOptionCControl, cardOptionCText, options.Length > 2 ? options[2] : default, options.Length > 2);
-
-            hasRescueAnchor = false;
-            SetState(CompanionState.RescueLevel2);
-            CaptureRescueAnchor();
-            if (hasRescueAnchor)
+            else
             {
-                var target = rescueAnchorPos + rescueAnchorRot * new Vector3(-0.34f, 0.15f, -0.05f);
-                transform.position = target;
-            }
-            PlaySound(chirpHintClip);
-        }
-
-        private static void ApplyCardVisual(PhysicalControl control, TMP_Text label, FoxHelpOption option, bool visible)
-        {
-            if (control != null)
-                control.gameObject.SetActive(visible);
-
-            if (!visible || label == null)
-                return;
-
-            string desc = string.IsNullOrWhiteSpace(option.englishDescription)
-                ? ""
-                : $"\n<size=68%><color=#94A3B8>{option.englishDescription}</color></size>";
-
-            label.text = $"<b><color=#F8FAFC>{option.french}</color></b>{desc}";
-        }
-
-        public void SetHelpCaption(string message)
-        {
-            var header = dialogueCardsRoot ? dialogueCardsRoot.transform.Find("Fox help header") : null;
-            if (header && header.TryGetComponent<TMP_Text>(out var text))
-            {
-                text.rectTransform.sizeDelta = new Vector2(0.94f, 0.23f);
-                text.text = message;
+                ApplyAuraColor(cyanHintColor, 0.12f);
             }
         }
 
-        public void SelectCardA() => onCardASelected?.Invoke();
-        public void SelectCardB() => onCardBSelected?.Invoke();
-        public void SelectCardC() => onCardCSelected?.Invoke();
-
-        public void Celebrate()
+        void ApplyAuraColor(Color color, float intensity)
         {
-            stateTimer = 0f;
-            SetState(CompanionState.Celebrating);
-            if (goldCelebrationParticles != null)
-                goldCelebrationParticles.Play();
-            PlaySound(celebrateClip);
-        }
-
-        public void ResetToObserving()
-        {
-            activeHintObject = null;
-            onCardASelected = null;
-            onCardBSelected = null;
-            onCardCSelected = null;
-            hasRescueAnchor = false;
-            SetState(CompanionState.Observing);
-        }
-
-        private void SetState(CompanionState newState)
-        {
-            CurrentState = newState;
-
-            bool isPropHint = newState == CompanionState.HintLevel1 && activeHintObject != null;
-            bool isPanelHint = newState == CompanionState.HintLevel1 && activeHintObject == null;
-            bool isRescue = newState == CompanionState.RescueLevel2;
-            bool isCelebration = newState == CompanionState.Celebrating;
-
-            if (vocabLabelRoot != null) vocabLabelRoot.SetActive(isPropHint);
-            if (hintPanelRoot != null) hintPanelRoot.SetActive(isPanelHint);
-            if (dialogueCardsRoot != null) dialogueCardsRoot.SetActive(isRescue);
-
             if (auraLight != null)
             {
-                auraLight.color = isCelebration ? goldCelebrationColor : cyanHintColor;
-                auraLight.intensity = (isPropHint || isPanelHint || isRescue || isCelebration) ? 2.5f : 0.8f;
+                auraLight.color = color;
+                auraLight.intensity = Mathf.Clamp(intensity * 1.4f, 0.1f, 2.0f);
+            }
+
+            if (glowPropBlock == null || foxMeshRenderers.Count == 0) return;
+
+            Color emissive = color * Mathf.Clamp01(intensity) * 0.28f;
+            for (int i = 0; i < foxMeshRenderers.Count; i++)
+            {
+                Renderer r = foxMeshRenderers[i];
+                if (r == null) continue;
+                r.GetPropertyBlock(glowPropBlock);
+                glowPropBlock.SetColor(EmissionColorId, emissive);
+                r.SetPropertyBlock(glowPropBlock);
             }
         }
 
-        private void PlaySound(AudioClip clip)
+        void HideAllPanels()
         {
-            if (audioSource != null && clip != null)
-                audioSource.PlayOneShot(clip);
+            if (hintPanelRoot != null) hintPanelRoot.SetActive(false);
+            if (dialogueCardsRoot != null) dialogueCardsRoot.SetActive(false);
+            if (vocabLabelRoot != null) vocabLabelRoot.SetActive(false);
+        }
+
+        // =====================================================================
+        // Public API (100% compatible with Paris & ApartmentPilot callers)
+        // =====================================================================
+
+        /// <summary>
+        /// Drives visual pulse & animation feedback while Alibaba Cloud TTS prepares or plays Fox audio.
+        /// </summary>
+        public void SetVoiceActivity(bool thinking, bool speaking)
+        {
+            isVoiceThinking = thinking;
+            isVoiceSpeaking = speaking;
+            if (speaking)
+                hasVoiceError = false;
+        }
+
+        /// <summary>
+        /// Optionally surfaces a Fox voice diagnostic on the active Fox panel.
+        /// </summary>
+        public void ShowVoiceDiagnostic(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                hasVoiceError = false;
+                lastDiagnosticSuffix = "";
+                return;
+            }
+
+            hasVoiceError = true;
+            lastDiagnosticSuffix = $"\n<size=72%><color=#FCA5A5>[Fox Voice] {message.Trim()}</color></size>";
+
+            if (hintPanelText != null)
+            {
+                if (hintPanelRoot != null && !hintPanelRoot.activeSelf && CurrentState == CompanionState.Observing)
+                {
+                    ResolveCamera();
+                    hasPanelAnchor = false;
+                    EnsurePanelAnchor();
+                    hintPanelRoot.SetActive(true);
+                    UpdateAnchoredPanelTransform(hintPanelRoot, 0f);
+                }
+
+                string core = string.IsNullOrEmpty(baseCaptionText) ? hintPanelText.text : baseCaptionText;
+                int marker = core.IndexOf("[Fox Voice]", StringComparison.Ordinal);
+                if (marker >= 0) core = core.Substring(0, marker).TrimEnd();
+                hintPanelText.text = (string.IsNullOrWhiteSpace(core) ? "Fox Voice Diagnostic" : core) + lastDiagnosticSuffix;
+            }
+        }
+
+        /// <summary>Opens the Fox Level 1 Hint / Tutor Explanation panel beside the Fox.</summary>
+        public void ShowHintPanel(string formattedText)
+        {
+            ResolveCamera();
+            CurrentState = CompanionState.HintLevel1;
+            level1WorldTarget = null;
+            hasVoiceError = false;
+            lastDiagnosticSuffix = "";
+            baseCaptionText = formattedText ?? "";
+
+            if (!hasPanelAnchor) EnsurePanelAnchor();
+
+            if (dialogueCardsRoot != null) dialogueCardsRoot.SetActive(false);
+            if (vocabLabelRoot != null) vocabLabelRoot.SetActive(false);
+
+            if (hintPanelRoot != null)
+            {
+                hintPanelRoot.SetActive(true);
+                UpdateAnchoredPanelTransform(hintPanelRoot, 0f);
+            }
+            if (hintPanelText != null)
+                hintPanelText.text = baseCaptionText;
+
+            if (auraParticles != null && !auraParticles.isPlaying)
+                auraParticles.Play();
+            if (chirpHintClip != null && audioSource != null && !audioSource.isPlaying)
+                audioSource.PlayOneShot(chirpHintClip, 0.45f);
+        }
+
+        /// <summary>Legacy ApartmentPilot Level 1 hint anchored above a world prop.</summary>
+        public void ShowHintLevel1(Transform worldTarget, string vocabWordFrench)
+        {
+            ResolveCamera();
+            CurrentState = CompanionState.HintLevel1;
+            level1WorldTarget = worldTarget;
+            hasVoiceError = false;
+            lastDiagnosticSuffix = "";
+
+            if (dialogueCardsRoot != null) dialogueCardsRoot.SetActive(false);
+
+            if (vocabLabelRoot != null)
+            {
+                vocabLabelRoot.SetActive(true);
+                if (vocabLabelText != null) vocabLabelText.text = vocabWordFrench ?? "";
+            }
+            else if (hintPanelRoot != null)
+            {
+                ShowHintPanel($"<b>{vocabWordFrench}</b>");
+            }
+        }
+
+        /// <summary>Opens Level 2 Rescue with up to 3 contextual French/English phrase cards.</summary>
+        public void ShowRescueOptions(FoxHelpOption[] options, Action<int> onOptionSelected)
+        {
+            ResolveCamera();
+            CurrentState = CompanionState.RescueLevel2;
+            level1WorldTarget = null;
+            onIndexedCardSelected = onOptionSelected;
+            onLegacyCardASelected = null;
+            onLegacyCardBSelected = null;
+            hasVoiceError = false;
+            lastDiagnosticSuffix = "";
+
+            if (!hasPanelAnchor) EnsurePanelAnchor();
+
+            if (vocabLabelRoot != null) vocabLabelRoot.SetActive(false);
+            if (dialogueCardsRoot != null)
+            {
+                dialogueCardsRoot.SetActive(true);
+                UpdateAnchoredPanelTransform(dialogueCardsRoot, 0f);
+            }
+
+            if (options != null)
+            {
+                ApplyCardText(cardOptionAText, cardOptionAControl, options, 0);
+                ApplyCardText(cardOptionBText, cardOptionBControl, options, 1);
+                ApplyCardText(cardOptionCText, cardOptionCControl, options, 2);
+            }
+        }
+
+        /// <summary>Legacy ApartmentPilot 2-card Level 2 rescue API.</summary>
+        public void ShowRescueLevel2(string phraseA, Action onA, string phraseB, Action onB)
+        {
+            ResolveCamera();
+            CurrentState = CompanionState.RescueLevel2;
+            level1WorldTarget = null;
+            onIndexedCardSelected = null;
+            onLegacyCardASelected = onA;
+            onLegacyCardBSelected = onB;
+
+            if (!hasPanelAnchor) EnsurePanelAnchor();
+            if (hintPanelRoot != null) hintPanelRoot.SetActive(false);
+            if (vocabLabelRoot != null) vocabLabelRoot.SetActive(false);
+
+            if (dialogueCardsRoot != null)
+            {
+                dialogueCardsRoot.SetActive(true);
+                UpdateAnchoredPanelTransform(dialogueCardsRoot, 0f);
+            }
+            if (cardOptionAText != null) cardOptionAText.text = phraseA ?? "";
+            if (cardOptionBText != null) cardOptionBText.text = phraseB ?? "";
+            if (cardOptionCControl != null) cardOptionCControl.gameObject.SetActive(false);
+        }
+
+        /// <summary>Updates the caption banner shown above Level 2 cards (e.g. pronunciation prompt).</summary>
+        public void SetHelpCaption(string caption)
+        {
+            baseCaptionText = caption ?? "";
+            if (hintPanelRoot != null)
+            {
+                hintPanelRoot.SetActive(!string.IsNullOrWhiteSpace(baseCaptionText));
+                if (hintPanelRoot.activeSelf)
+                {
+                    EnsurePanelAnchor();
+                    UpdateAnchoredPanelTransform(hintPanelRoot, CurrentState == CompanionState.RescueLevel2 ? 0.34f : 0f);
+                }
+            }
+            if (hintPanelText != null)
+                hintPanelText.text = baseCaptionText + lastDiagnosticSuffix;
+        }
+
+        /// <summary>Triggers a smooth lightweight celebratory orbit and gold aura feedback.</summary>
+        public void Celebrate()
+        {
+            ResolveCamera();
+            HideAllPanels();
+            hasPanelAnchor = false;
+            level1WorldTarget = null;
+            hasVoiceError = false;
+            lastDiagnosticSuffix = "";
+
+            CurrentState = CompanionState.Celebrating;
+            celebrateElapsed = 0f;
+
+            if (headCamera != null)
+            {
+                celebrateOriginPos = headCamera.position;
+                Vector3 flatFwd = Vector3.ProjectOnPlane(headCamera.forward, Vector3.up);
+                if (flatFwd.sqrMagnitude < 0.001f) flatFwd = Vector3.forward;
+                celebrateOriginRot = Quaternion.LookRotation(flatFwd.normalized, Vector3.up);
+            }
+            else
+            {
+                celebrateOriginPos = transform.position;
+                celebrateOriginRot = Quaternion.identity;
+            }
+
+            if (goldCelebrationParticles != null)
+                goldCelebrationParticles.Play();
+            if (celebrateClip != null && audioSource != null && !audioSource.isPlaying)
+                audioSource.PlayOneShot(celebrateClip, 0.55f);
+        }
+
+        /// <summary>Returns the Fox quietly to its lower-right Observing rest position and closes help panels.</summary>
+        public void ResetToObserving()
+        {
+            CurrentState = CompanionState.Observing;
+            level1WorldTarget = null;
+            hasPanelAnchor = false;
+            hasVoiceError = false;
+            lastDiagnosticSuffix = "";
+            baseCaptionText = "";
+            onIndexedCardSelected = null;
+            onLegacyCardASelected = null;
+            onLegacyCardBSelected = null;
+            HideAllPanels();
+
+            if (auraParticles != null && auraParticles.isPlaying)
+                auraParticles.Stop();
+        }
+
+        static void ApplyCardText(TMP_Text label, PhysicalControl control, FoxHelpOption[] options, int index)
+        {
+            bool hasOption = index < options.Length && !string.IsNullOrWhiteSpace(options[index].french);
+            if (control != null)
+                control.gameObject.SetActive(hasOption);
+
+            if (label != null && hasOption)
+            {
+                string fr = options[index].french.Trim();
+                string en = (options[index].englishDescription ?? "").Trim();
+                label.text = string.IsNullOrEmpty(en)
+                    ? $"<b><color=#F8FAFC>{fr}</color></b>"
+                    : $"<b><color=#F8FAFC>{fr}</color></b>\n<size=68%><color=#94A3B8>{en}</color></size>";
+            }
         }
     }
 }

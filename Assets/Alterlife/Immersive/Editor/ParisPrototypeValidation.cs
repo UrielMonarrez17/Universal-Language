@@ -54,6 +54,7 @@ namespace Alterlife.Immersive.Editor
         static void Begin()
         {
             RestaurantVoiceBridge.DisableGeminiForTests = true;
+            RestaurantVoiceBridge.DisableAlibabaForTests = true;
             RestaurantVoiceBridge.TestTurnHandler = null;
             ComfortOptions.PersistenceEnabled = true;
             PlayerPrefs.SetInt("Alterlife.Comfort.SmoothMove", 0);
@@ -94,6 +95,7 @@ namespace Alterlife.Immersive.Editor
             SceneManager.sceneLoaded -= DisablePersistence;
             RestaurantVoiceBridge.TestTurnHandler = null;
             RestaurantVoiceBridge.DisableGeminiForTests = false;
+            RestaurantVoiceBridge.DisableAlibabaForTests = false;
             if (target) target.Release();
             EditorApplication.ExitPlaymode();
         }
@@ -424,17 +426,17 @@ namespace Alterlife.Immersive.Editor
             eval.BeginPractice();
             Assert(eval.Stage == RestaurantStage.Welcome, "RETRY EXAM restarts the exam cleanly when autonomy threshold was not met");
 
-            // 5. Audio encoding + Gemini WAV & raw PCM decoding + Local Anti-Noise Gate + Disk TTS Cache + Local Piper TTS
+            // 5. Audio encoding + WAV & raw PCM decoding + Local Anti-Noise Gate + Disk TTS Cache + Alibaba Fox TTS Failover
             byte[] wav = RestaurantVoiceBridge.EncodeWav(new float[1600], 1, 16000);
             Assert(wav.Length == 3244 && System.Text.Encoding.ASCII.GetString(wav, 0, 4) == "RIFF",
                 "Microphone WAV encoding has valid PCM header and length");
             var decodedWav = RestaurantVoiceBridge.DecodeGeminiAudio(wav, "audio/wav", "TestWav");
             Assert(decodedWav != null && decodedWav.samples == 1600 && decodedWav.frequency == 16000,
-                "Gemini TTS decoder parses RIFF/WAV containers accurately");
+                "WAV decoder parses RIFF/WAV containers accurately");
             UnityEngine.Object.Destroy(decodedWav);
             var decodedPcm = RestaurantVoiceBridge.DecodeGeminiAudio(new byte[4800], "audio/L16;codec=pcm;rate=24000", "TestPcm");
             Assert(decodedPcm != null && decodedPcm.samples == 2400 && decodedPcm.frequency == 24000,
-                "Gemini TTS decoder parses raw L16 PCM audio accurately");
+                "PCM decoder parses raw L16 PCM audio accurately");
             UnityEngine.Object.Destroy(decodedPcm);
 
             // Local C# Acoustic Anti-Noise Gate: single word ("Oui" ~0.22s voiced vowel) MUST pass, click/rumble/silence MUST be rejected
@@ -457,7 +459,7 @@ namespace Alterlife.Immersive.Editor
             Assert(!RestaurantVoiceBridge.PassesHumanSpeechFilter(rumblePcm, 16000, 0.004f),
                 "Anti-noise filter rejects low-frequency breath/wind rumble");
 
-            // Persistent Disk TTS Cache verification (0-latency hash + disk reload)
+            // Persistent Disk TTS Cache verification (0-latency hash + disk reload for Waiter & Fox)
             string testPhrase = "Bonjour ! Bienvenue au Café de Paris.";
             var cachedWriteClip = eval.voice.CachePcmClipToMemoryAndDisk("gemini_Puck_fr", testPhrase, singleWordPcm, 16000, "TestDiskCache");
             Assert(cachedWriteClip != null && eval.voice.DiskCacheEntryCount > 0, "TTS clip indexed and saved to persistent disk cache");
@@ -465,21 +467,63 @@ namespace Alterlife.Immersive.Editor
                    diskLoadedClip != null && diskLoadedClip.samples == singleWordPcm.Length,
                 "Persistent disk TTS cache reloads saved phrase audio from disk without calling Gemini API");
 
-            // Local Piper TTS (fr_FR-siwis-medium + en_US-amy-low) verification
-            using (var piper = new PiperLocalTts())
-            {
-                var prep = piper.Prepare();
-                while (prep.MoveNext()) yield return null;
-                Assert(piper.Ready, "Local Piper TTS initialized (fr_FR-siwis-medium + en_US-amy-low)");
-                var frTask = piper.SynthesizeAsync("Bonjour, merci beaucoup !", isFrench: true);
-                while (!frTask.IsCompleted) yield return null;
-                Assert(!frTask.IsFaulted && frTask.Result.samples != null && frTask.Result.samples.Length > 2000,
-                    "Local Piper fr_FR-siwis synthesizes French phrase audio offline");
-                var enTask = piper.SynthesizeAsync("Try greeting Lucas politely in French.", isFrench: false);
-                while (!enTask.IsCompleted) yield return null;
-                Assert(!enTask.IsFaulted && enTask.Result.samples != null && enTask.Result.samples.Length > 2000,
-                    "Local Piper en_US-amy synthesizes English tutor explanation offline");
-            }
+            // Alibaba Cloud Model Studio (DashScope ap-southeast-1) Fox TTS Failover & Protocol Verification
+            var frChain = AlibabaTtsClient.BuildModelChain("qwen3-tts-flash", "Cherry", isFrench: true);
+            var enChain = AlibabaTtsClient.BuildModelChain("qwen3-tts-flash", "Cherry", isFrench: false);
+            Assert(frChain.Count >= 12 && frChain[0].ModelId == "qwen3-tts-flash" && frChain[0].Protocol == AlibabaTtsProtocol.QwenHttp,
+                "Alibaba TTS chain starts with qwen3-tts-flash over HTTP");
+            Assert(frChain.Any(m => m.ModelId == "qwen3-tts-plus") &&
+                   frChain.Any(m => m.ModelId == "qwen-audio-3.1-tts-next") &&
+                   frChain.Any(m => m.ModelId == "qwen-tts"),
+                "Alibaba TTS failover chain includes Qwen TTS backup family");
+            Assert(frChain.First(m => m.Protocol == AlibabaTtsProtocol.SambertWebSocket).ModelId == "sambert-clara-v1",
+                "Alibaba TTS French Sambert failover prioritizes native French voice sambert-clara-v1");
+            Assert(enChain.First(m => m.Protocol == AlibabaTtsProtocol.SambertWebSocket).ModelId == "sambert-beth-v1",
+                "Alibaba TTS English Sambert failover prioritizes native English voice sambert-beth-v1");
+
+            string qwenPayload = AlibabaTtsClient.BuildQwenHttpPayload(frChain[0], "Bonjour !", isFrench: true);
+            Assert(qwenPayload.Contains("\"model\":\"qwen3-tts-flash\"") && qwenPayload.Contains("\"voice\":\"Cherry\"") && qwenPayload.Contains("\"language_type\":\"French\""),
+                "Alibaba Qwen3-TTS-Flash payload formats model, Cherry voice, and French language_type accurately");
+
+            string sambertPayload = AlibabaTtsClient.BuildSambertRunTaskPayload("task123", "sambert-clara-v1", "Bonjour !", 0.85f);
+            Assert(sambertPayload.Contains("\"action\":\"run-task\"") && sambertPayload.Contains("\"streaming\":\"out\"") &&
+                   sambertPayload.Contains("\"model\":\"sambert-clara-v1\"") && sambertPayload.Contains("\"format\":\"pcm\""),
+                "Alibaba Sambert WebSocket run-task payload uses output-only streaming and raw PCM");
+
+            Assert(AlibabaTtsClient.TryParseQwenHttpResponse(
+                "{\"output\":{\"audio\":{\"url\":\"http://dashscope-result-sgp.oss-ap-southeast-1.aliyuncs.com/test.wav\"}}}",
+                out string parsedUrl, out _, out _, out _) &&
+                parsedUrl.StartsWith("https://dashscope-result-sgp.oss-ap-southeast-1.aliyuncs.com/", StringComparison.Ordinal),
+                "Alibaba HTTP response parser extracts audio URL and upgrades http:// to https:// for Quest 2");
+
+            Assert(AlibabaTtsClient.IsPermanentModelExhaustedError(403, "AllocationQuota.FreeTierOnly", "Free tier exhausted") &&
+                   AlibabaTtsClient.IsAuthenticationError(401, "InvalidApiKey", "Invalid API-key") &&
+                   string.IsNullOrEmpty(AlibabaTtsClient.NormalizeApiKey("# comment\nPASTE_YOUR_ALIBABA_DASHSCOPE_API_KEY_HERE\n")) &&
+                   AlibabaTtsClient.NormalizeApiKey("# comment\nsk-test-12345\n") == "sk-test-12345",
+                "Alibaba error classification and API key sanitization behave accurately");
+
+            var alibabaClient = new AlibabaTtsClient();
+            alibabaClient.MarkModelExhausted("qwen3-tts-flash");
+            Assert(alibabaClient.IsModelMarkedExhausted("qwen3-tts-flash") && !alibabaClient.IsModelMarkedExhausted("qwen3-tts-plus"),
+                "Alibaba failover client tracks exhausted models per session without blocking backups");
+
+            var foxDiskClip = eval.voice.CachePcmClipToMemoryAndDisk("alibaba_cherry_fr_85", "Bonjour, je voudrais un café.", singleWordPcm, 16000, "TestFoxAlibabaCache");
+            Assert(foxDiskClip != null && eval.voice.TryLoadCachedClip("alibaba_cherry_fr_85", "Bonjour, je voudrais un café.", out var foxReloaded, allowRam: false) && foxReloaded != null,
+                "Fox Alibaba WAV audio reloads cleanly from persistent disk cache");
+            Assert(!File.Exists("Assets/Alterlife/Immersive/KokoroLocalTts.cs") && !File.Exists("Assets/StreamingAssets/kokoro-fox-v1_0.zip"),
+                "All Kokoro local TTS code and model archives have been completely removed");
+
+            // Rewritten HummingbirdCompanion celebration + Quest 2 Paris draw-call / shadow budget verification
+            eval.companion.Celebrate();
+            Assert(eval.companion.CurrentState == CompanionState.Celebrating, "Rewritten Fox companion enters lightweight celebratory orbit");
+            eval.companion.ResetToObserving();
+            Assert(eval.companion.CurrentState == CompanionState.Observing, "Rewritten Fox companion resets cleanly to lower-right Observing");
+
+            var activeRenderers = UnityEngine.Object.FindObjectsByType<MeshRenderer>().Where(r => r.enabled && r.gameObject.activeInHierarchy).ToArray();
+            int shadowCasters = activeRenderers.Count(r => r.shadowCastingMode != UnityEngine.Rendering.ShadowCastingMode.Off);
+            Debug.Log($"[ParisValidation] Active MeshRenderers={activeRenderers.Length}, ShadowCasters={shadowCasters}");
+            Assert(activeRenderers.Length <= 260, $"Paris active MeshRenderer count stays within Quest 2 budget ({activeRenderers.Length} <= 260)");
+            Assert(shadowCasters <= 45, $"Paris real-time shadow casters stay within Quest 2 budget ({shadowCasters} <= 45)");
 
             // 6. Return navigation: Paris -> BookSelection -> ImmersiveHub
             eval.ReturnToBook();
@@ -550,7 +594,7 @@ namespace Alterlife.Immersive.Editor
             foreach (var cam in UnityEngine.Object.FindObjectsByType<Camera>()) cam.enabled = false;
             preview = new GameObject("Paris validation camera", typeof(Camera)).GetComponent<Camera>();
             preview.nearClipPlane = .03f;
-            preview.farClipPlane = 180;
+            preview.farClipPlane = 360f;
             preview.fieldOfView = 68;
             preview.clearFlags = CameraClearFlags.Skybox;
             target = new RenderTexture(1600, 1000, 24);

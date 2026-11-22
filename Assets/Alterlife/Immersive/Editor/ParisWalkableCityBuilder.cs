@@ -292,7 +292,7 @@ namespace Alterlife.Immersive.Editor
 
             if (xrOrigin != null && xrOrigin.Camera != null)
             {
-                xrOrigin.Camera.farClipPlane = 850f;
+                xrOrigin.Camera.farClipPlane = 360f;
                 xrOrigin.Camera.nearClipPlane = 0.04f;
                 EditorUtility.SetDirty(xrOrigin.Camera);
             }

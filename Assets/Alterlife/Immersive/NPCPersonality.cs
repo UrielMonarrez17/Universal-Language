@@ -37,8 +37,8 @@ namespace Alterlife.Immersive
         public string roleTitle = "Local resident";
         [Tooltip("Gemini prebuilt voice name for this NPC (e.g. Puck, Charon, Kore, Fenrir, Aoede).")]
         public string geminiVoiceName = "Puck";
-        [Tooltip("Distinct Gemini prebuilt voice name for the Fox companion tutor.")]
-        public string foxVoiceName = "Aoede";
+        [Tooltip("Distinct Alibaba Model Studio TTS voice name for the Fox companion tutor (e.g. Cherry, Serena, Ethan).")]
+        public string foxVoiceName = "Cherry";
         public string targetLanguage = "French (fr-FR)";
         public string learnerLevel = "A2/B1 intermediate (Level 3/5)";
 

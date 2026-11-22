@@ -29,7 +29,6 @@ namespace Alterlife.Immersive.Editor
             if (!Application.isBatchMode && SceneManager.GetActiveScene().isDirty)
                 EditorSceneManager.SaveOpenScenes();
 
-            ConfigureNativePlugins();
             UpdateDataAssets();
             ImmersiveExperienceUpgrade.ApplyAll();
             UpdateParisScene();
@@ -37,46 +36,6 @@ namespace Alterlife.Immersive.Editor
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
             Debug.Log("ALTERLIFE_PARIS_NARRATIVE_UPGRADE_APPLIED");
-        }
-
-        static void ConfigureNativePlugins()
-        {
-            string[] androidLibs =
-            {
-                "Assets/Alterlife/Immersive/Paris/Plugins/Android/arm64-v8a/libonnxruntime.so",
-                "Assets/Alterlife/Immersive/Paris/Plugins/Android/arm64-v8a/libsherpa-onnx-c-api.so"
-            };
-
-            foreach (string path in androidLibs)
-            {
-                var importer = AssetImporter.GetAtPath(path) as PluginImporter;
-                if (importer == null) continue;
-                importer.SetCompatibleWithAnyPlatform(false);
-                importer.SetCompatibleWithEditor(false);
-                importer.SetCompatibleWithPlatform(BuildTarget.Android, true);
-                importer.SetPlatformData(BuildTarget.Android, "CPU", "ARM64");
-                importer.SaveAndReimport();
-            }
-
-            string[] winLibs =
-            {
-                "Assets/Alterlife/Immersive/Paris/Plugins/x86_64/onnxruntime.dll",
-                "Assets/Alterlife/Immersive/Paris/Plugins/x86_64/onnxruntime_providers_shared.dll",
-                "Assets/Alterlife/Immersive/Paris/Plugins/x86_64/sherpa-onnx-c-api.dll"
-            };
-
-            foreach (string path in winLibs)
-            {
-                var importer = AssetImporter.GetAtPath(path) as PluginImporter;
-                if (importer == null) continue;
-                importer.SetCompatibleWithAnyPlatform(false);
-                importer.SetCompatibleWithEditor(true);
-                importer.SetEditorData("CPU", "x86_64");
-                importer.SetEditorData("OS", "Windows");
-                importer.SetCompatibleWithPlatform(BuildTarget.StandaloneWindows64, true);
-                importer.SetPlatformData(BuildTarget.StandaloneWindows64, "CPU", "x86_64");
-                importer.SaveAndReimport();
-            }
         }
 
         static void UpdateDataAssets()
@@ -300,7 +259,7 @@ namespace Alterlife.Immersive.Editor
             if (personality != null)
             {
                 personality.geminiVoiceName = "Puck";
-                personality.foxVoiceName = "Aoede";
+                personality.foxVoiceName = AlibabaTtsClient.DefaultVoice;
                 personality.learnerLevel = "Intermediate (A2/B1 · Level 3/5)";
                 personality.includeGentleOrderConfirmationMistake = true;
                 personality.worldKnowledge = RestaurantLesson.DefaultMenuCatalog;
@@ -317,6 +276,8 @@ namespace Alterlife.Immersive.Editor
                 SerializedObject voiceSo = new SerializedObject(voice);
                 voiceSo.FindProperty("geminiChatModel").stringValue = "gemini-3.5-flash-lite";
                 voiceSo.FindProperty("geminiTtsModel").stringValue = "gemini-3.8-flash-lite-tts";
+                voiceSo.FindProperty("alibabaPrimaryModel").stringValue = AlibabaTtsClient.DefaultPrimaryModel;
+                voiceSo.FindProperty("alibabaFoxVoice").stringValue = AlibabaTtsClient.DefaultVoice;
                 voiceSo.FindProperty("hudMicStatusLabel").objectReferenceValue = hudMicLabel;
                 voiceSo.FindProperty("hudMicStatusBacking").objectReferenceValue = hudMicBackingRenderer;
                 voiceSo.ApplyModifiedPropertiesWithoutUndo();

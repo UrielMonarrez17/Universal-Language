@@ -7,7 +7,7 @@ namespace Alterlife.Immersive
     /// <summary>
     /// Individual personality, rubric director, and dual-role acting script for:
     /// 1) Lucas Moreau — authentic Parisian café waiter at Le Café de Paris (French, Puck voice).
-    /// 2) Fox Companion Tutor — warm English language coach answering learner questions on demand (English, Aoede voice).
+    /// 2) Fox Companion Tutor — warm English language coach answering learner questions on demand (Alibaba TTS, Cherry voice).
     /// </summary>
     public sealed class ParisWaiterPersonality : NPCPersonality
     {
@@ -23,7 +23,7 @@ namespace Alterlife.Immersive
             npcName = "Lucas Moreau";
             roleTitle = "Friendly Parisian waiter at Le Café de Paris in Paris, France";
             geminiVoiceName = "Puck";
-            foxVoiceName = "Aoede";
+            foxVoiceName = "Cherry";
             targetLanguage = "French (fr-FR)";
             learnerLevel = "Intermediate (A2/B1 · Level 3/5)";
 

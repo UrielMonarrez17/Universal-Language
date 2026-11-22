@@ -21,7 +21,9 @@ namespace Alterlife.Immersive
     {
         public float targetRefreshRate = 72f;
         [Range(0f, 1f)]
-        public float foveatedRenderingLevel = 0.65f;
+        public float foveatedRenderingLevel = 0.85f;
+        [Tooltip("Maximum camera far clip distance on Meta Quest to prevent rendering unnecessary distant geometry.")]
+        public float maxCameraFarClip = 360f;
 
         static bool hookRegistered;
         static readonly List<XRDisplaySubsystem> Displays = new List<XRDisplaySubsystem>();
@@ -62,16 +64,16 @@ namespace Alterlife.Immersive
             }
             else
             {
-                ApplyStaticDefaults(72f, 0.65f);
+                ApplyStaticDefaults(72f, 0.85f, 360f);
             }
         }
 
         public void ApplyRuntimeSettings()
         {
-            ApplyStaticDefaults(targetRefreshRate, foveatedRenderingLevel);
+            ApplyStaticDefaults(targetRefreshRate, foveatedRenderingLevel, maxCameraFarClip);
         }
 
-        static void ApplyStaticDefaults(float refreshRate, float ffrLevel)
+        static void ApplyStaticDefaults(float refreshRate, float ffrLevel, float maxFarClip)
         {
             Application.targetFrameRate = Mathf.RoundToInt(refreshRate);
             QualitySettings.vSyncCount = 0;
@@ -87,6 +89,10 @@ namespace Alterlife.Immersive
             if (origin != null)
             {
                 ComfortOptions.ApplySavedPosture(origin);
+                if (origin.Camera != null && maxFarClip > 20f && origin.Camera.farClipPlane > maxFarClip)
+                {
+                    origin.Camera.farClipPlane = maxFarClip;
+                }
             }
         }
 
