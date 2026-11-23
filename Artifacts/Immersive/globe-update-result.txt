@@ -1,1 +1,0 @@
-PASS: horizontal-only rotation; pitch/roll rejected; France flag pin and hover label wired; scene saved.

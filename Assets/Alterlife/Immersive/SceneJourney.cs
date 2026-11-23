@@ -22,9 +22,23 @@ namespace Alterlife.Immersive
             }
             if (fade)
             {
+                if (VrBriefingOverlay.HasActiveOverlay)
+                {
+                    fade.TransitionOpacity = 0f;
+                    yield break;
+                }
+
                 fade.TransitionOpacity = 1;
                 for (float t = 0; t < .3f; t += Time.unscaledDeltaTime)
-                { fade.TransitionOpacity = 1 - t / .3f; yield return null; }
+                {
+                    if (VrBriefingOverlay.HasActiveOverlay)
+                    {
+                        fade.TransitionOpacity = 0f;
+                        yield break;
+                    }
+                    fade.TransitionOpacity = 1 - t / .3f;
+                    yield return null;
+                }
                 fade.TransitionOpacity = 0;
             }
         }

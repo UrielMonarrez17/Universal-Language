@@ -16,16 +16,12 @@ namespace Alterlife.Immersive
 {
     /// <summary>
     /// Hybrid AI Voice & Audio Bridge for Le Café de Paris:
-    /// - Waiter (Lucas Moreau): Gemini Multimodal Audio-In + Gemini TTS ('Puck') backed by a 0-latency
-    ///   RAM + Persistent Disk TTS Cache (Application.persistentDataPath/TtsCache).
+    /// - Waiter (Lucas Moreau): Gemini Multimodal Audio-In + Gemini TTS ('Puck') backed by RAM + Disk TTS cache.
     /// - Fox Companion Tutor: Alibaba Cloud Model Studio (DashScope Singapore / ap-southeast-1) TTS
-    ///   using 'qwen3-tts-flash' (voice 'Cherry') with automatic quota/error failover across the
-    ///   Qwen TTS family and Sambert family, backed by RAM + Persistent Disk WAV Caching.
-    ///   If all Alibaba models exhaust quota or fail, the Fox displays its visual text panels silently.
+    ///   using 'qwen3-tts-flash' with automatic failover across Qwen TTS and Sambert backup families.
     /// - Local C# Acoustic Human-Speech Filter: allows short single-word replies ('Oui', 'Non', 'Café')
     ///   while rejecting clicks, bumps, breaths, and ambient noise before calling Gemini.
-    /// - Right Controller B Button: instant Mic Mute/Unmute toggle (cancelling any mid-sentence capture)
-    ///   with a compact bottom-right HUD indicator in the player's field of view.
+    /// - Right Controller B Button: instant Mic Mute/Unmute toggle with a high-contrast HUD indicator.
     /// </summary>
     public sealed class RestaurantVoiceBridge : MonoBehaviour
     {
@@ -64,7 +60,6 @@ namespace Alterlife.Immersive
 
         [Header("Scene References")]
         public RestaurantEvaluation evaluation;
-        public CommunicativeEncounter encounter;
         public NPCPersonality npcPersonality;
         public AudioSource speaker;
         public AudioSource foxSpeaker;
@@ -76,21 +71,17 @@ namespace Alterlife.Immersive
         [SerializeField] private float cafeLeaveRadius = 6.2f;
         [SerializeField] private float cafeReturnRadius = 5.5f;
 
-        // Legacy serialized field kept for scene YAML compatibility
-        [HideInInspector] public string serviceUrl;
-
-        /// <summary>Disables live Gemini HTTP calls during automated Editor tests.</summary>
+        /// <summary>Disables live Gemini HTTP calls during automated tests.</summary>
         public static bool DisableGeminiForTests;
 
-        /// <summary>Disables live Alibaba Cloud TTS HTTP/WebSocket calls during automated Editor tests.</summary>
+        /// <summary>Disables live Alibaba Cloud TTS HTTP/WebSocket calls during automated tests.</summary>
         public static bool DisableAlibabaForTests;
 
-        /// <summary>Optional deterministic handler used exclusively by automated Play Mode tests.</summary>
+        /// <summary>Optional deterministic handler used exclusively by automated tests.</summary>
         public static Func<string, GeminiWaiterTurn> TestTurnHandler;
 
         public bool HasGeminiKey => !DisableGeminiForTests && !string.IsNullOrWhiteSpace(ResolveGeminiKey());
         public bool HasAlibabaKey => !DisableAlibabaForTests && !string.IsNullOrWhiteSpace(ResolveAlibabaKey());
-        public bool IsConfigured => HasGeminiKey;
         public bool IsAiReady => HasGeminiKey || TestTurnHandler != null;
         public bool IsRecording { get; private set; }
         public bool IsBusy { get; private set; }
@@ -98,11 +89,8 @@ namespace Alterlife.Immersive
         public bool IsExploringCity { get; private set; }
         public int FilteredNoiseCount { get; private set; }
         public int DiskCacheHitCount { get; private set; }
-        public int DiskCacheEntryCount => diskCacheIndex.Count;
         public string ActiveAlibabaFoxModel => alibabaTts != null ? alibabaTts.ActiveModelId : "";
-        public bool IsFoxSynthesizing => isSynthesizingFoxSpeech;
         public bool IsFoxSpeaking => foxSpeaker != null && foxSpeaker.isPlaying;
-        public string LastFoxVoiceError => alibabaTts != null ? alibabaTts.LastError : "";
         public bool IsAnyActorSpeaking =>
             isSynthesizingSpeech ||
             isSynthesizingFoxSpeech ||
@@ -119,8 +107,8 @@ namespace Alterlife.Immersive
         const int MaxHistoryEntries = 6;
         const string DiskCacheFolderName = "TtsCache";
 
-        static readonly Color HudMicOnColor = new Color(0.06f, 0.14f, 0.20f, 0.82f);
-        static readonly Color HudMicMutedColor = new Color(0.32f, 0.08f, 0.10f, 0.88f);
+        static readonly Color HudMicOnColor = new Color(0.07f, 0.075f, 0.085f, 0.95f);
+        static readonly Color HudMicMutedColor = new Color(0.24f, 0.06f, 0.08f, 0.96f);
 
         AudioClip micRingClip;
         string device;
@@ -186,10 +174,16 @@ namespace Alterlife.Immersive
             public bool issuedConfirmationChallenge;
             public bool resolvedConfirmationChallenge;
             public bool servedOrder;
+            public bool serveDessert;
+            public bool clearTable;
+            public bool bringBill;
             public int matchedFoxOptionIndex = -1;
             public string[] level1Keywords;
             public string level1TipEnglish;
             public FoxHelpOption[] nextFoxOptions;
+            public int finalScore;
+            public string[] finalStrengths;
+            public string[] finalImprovements;
             public string finalSummaryEnglish;
         }
 
@@ -210,6 +204,9 @@ namespace Alterlife.Immersive
                 "\"issuedConfirmationChallenge\":{\"type\":\"BOOLEAN\"}," +
                 "\"resolvedConfirmationChallenge\":{\"type\":\"BOOLEAN\"}," +
                 "\"servedOrder\":{\"type\":\"BOOLEAN\"}," +
+                "\"serveDessert\":{\"type\":\"BOOLEAN\"}," +
+                "\"clearTable\":{\"type\":\"BOOLEAN\"}," +
+                "\"bringBill\":{\"type\":\"BOOLEAN\"}," +
                 "\"matchedFoxOptionIndex\":{\"type\":\"INTEGER\"}," +
                 "\"level1Keywords\":{\"type\":\"ARRAY\",\"items\":{\"type\":\"STRING\"}}," +
                 "\"level1TipEnglish\":{\"type\":\"STRING\"}," +
@@ -224,6 +221,9 @@ namespace Alterlife.Immersive
                         "\"required\":[\"french\",\"englishDescription\"]" +
                     "}" +
                 "}," +
+                "\"finalScore\":{\"type\":\"INTEGER\"}," +
+                "\"finalStrengths\":{\"type\":\"ARRAY\",\"items\":{\"type\":\"STRING\"}}," +
+                "\"finalImprovements\":{\"type\":\"ARRAY\",\"items\":{\"type\":\"STRING\"}}," +
                 "\"finalSummaryEnglish\":{\"type\":\"STRING\"}" +
             "}," +
             "\"required\":[" +
@@ -231,8 +231,9 @@ namespace Alterlife.Immersive
                 "\"foxTutorReplyEnglish\",\"feedbackEnglish\",\"newlyCompletedMilestones\"," +
                 "\"detectedFood\",\"detectedDrink\",\"detectedDessert\"," +
                 "\"issuedConfirmationChallenge\",\"resolvedConfirmationChallenge\",\"servedOrder\"," +
+                "\"serveDessert\",\"clearTable\",\"bringBill\"," +
                 "\"matchedFoxOptionIndex\",\"level1Keywords\",\"level1TipEnglish\"," +
-                "\"nextFoxOptions\",\"finalSummaryEnglish\"" +
+                "\"nextFoxOptions\",\"finalScore\",\"finalStrengths\",\"finalImprovements\",\"finalSummaryEnglish\"" +
             "]" +
             "}";
 
@@ -240,7 +241,6 @@ namespace Alterlife.Immersive
         {
             InitializeDiskCacheIndex();
             RefreshHudMicVisual();
-            CleanupLegacyKokoroFilesAsync();
         }
 
         void Start()
@@ -257,45 +257,11 @@ namespace Alterlife.Immersive
         {
             if (cafeAnchor != null) return;
             var table = GameObject.Find("Your table");
-            if (table != null)
-            {
-                cafeAnchor = table.transform;
-                return;
-            }
-            if (evaluation != null && evaluation.menu != null)
-            {
-                cafeAnchor = evaluation.menu;
-                return;
-            }
-            if (speaker != null)
-                cafeAnchor = speaker.transform;
+            if (table != null) { cafeAnchor = table.transform; return; }
+            if (evaluation != null && evaluation.menu != null) { cafeAnchor = evaluation.menu; return; }
+            if (speaker != null) cafeAnchor = speaker.transform;
         }
 
-        void CleanupLegacyKokoroFilesAsync()
-        {
-            string baseDir = Application.persistentDataPath;
-            if (string.IsNullOrEmpty(baseDir))
-                return;
-
-            Task.Run(() =>
-            {
-                string[] legacyFolders = { "kokoro-fox-v1_0", "KokoroTmp" };
-                for (int i = 0; i < legacyFolders.Length; i++)
-                {
-                    try
-                    {
-                        string path = Path.Combine(baseDir, legacyFolders[i]);
-                        if (Directory.Exists(path))
-                            Directory.Delete(path, recursive: true);
-                    }
-                    catch { }
-                }
-            });
-        }
-
-        /// <summary>
-        /// Indexes existing cached .wav files into an in-memory HashSet once at startup so cache checks take &lt; 0.02 ms.
-        /// </summary>
         public void InitializeDiskCacheIndex()
         {
             if (diskCacheInitialized && !string.IsNullOrEmpty(diskCacheDir))
@@ -320,9 +286,6 @@ namespace Alterlife.Immersive
             }
         }
 
-        /// <summary>
-        /// Computes a deterministic 24-hex SHA-256 cache key for (voiceTag + normalized phrase) in &lt; 0.02 ms.
-        /// </summary>
         public static string ComputeTtsCacheHash(string voiceTag, string text)
         {
             string normalized = Regex.Replace((text ?? "").Trim().ToLowerInvariant(), @"\s+", " ");
@@ -337,27 +300,7 @@ namespace Alterlife.Immersive
             }
         }
 
-        /// <summary>
-        /// Stores raw float PCM samples into both the in-memory RAM cache and persistent disk cache (.wav).
-        /// </summary>
-        public AudioClip CachePcmClipToMemoryAndDisk(string voiceTag, string text, float[] samples, int sampleRate, string clipName = "CachedVoice")
-        {
-            if (samples == null || samples.Length == 0 || sampleRate <= 0)
-                return null;
-
-            InitializeDiskCacheIndex();
-            string hash = ComputeTtsCacheHash(voiceTag, text);
-
-            var clip = AudioClip.Create(clipName, samples.Length, 1, sampleRate, false);
-            clip.SetData(samples, 0);
-            CacheTtsClipInRam(hash, clip);
-
-            byte[] wavBytes = EncodeWav(samples, 1, sampleRate);
-            SaveWavToDiskCache(hash, wavBytes, synchronous: true);
-            return clip;
-        }
-
-        void SaveWavToDiskCache(string hash, byte[] wavBytes, bool synchronous = false)
+        void SaveWavToDiskCache(string hash, byte[] wavBytes)
         {
             if (string.IsNullOrWhiteSpace(hash) || wavBytes == null || wavBytes.Length < 44)
                 return;
@@ -366,17 +309,9 @@ namespace Alterlife.Immersive
             if (string.IsNullOrEmpty(diskCacheDir))
                 return;
 
-            string path = Path.Combine(diskCacheDir, hash + ".wav");
+            string targetPath = Path.Combine(diskCacheDir, hash + ".wav");
             diskCacheIndex.Add(hash);
 
-            if (synchronous)
-            {
-                try { File.WriteAllBytes(path, wavBytes); }
-                catch (Exception ex) { Debug.LogWarning("[ParisVoice] Disk cache write failed: " + ex.Message); }
-                return;
-            }
-
-            string targetPath = path;
             byte[] dataCopy = wavBytes;
             Task.Run(() =>
             {
@@ -498,16 +433,11 @@ namespace Alterlife.Immersive
 
             bool bPressed = rightDevice.TryGetFeatureValue(CommonUsages.secondaryButton, out bool pressed) && pressed;
             if (bPressed && !wasRightBPressed)
-            {
                 ToggleMicrophoneMute();
-            }
             wasRightBPressed = bPressed;
         }
 
-        public void ToggleMicrophoneMute()
-        {
-            SetMicrophoneMuted(!IsMicrophoneMuted);
-        }
+        public void ToggleMicrophoneMute() => SetMicrophoneMuted(!IsMicrophoneMuted);
 
         public void SetMicrophoneMuted(bool muted)
         {
@@ -515,11 +445,9 @@ namespace Alterlife.Immersive
 
             if (IsMicrophoneMuted)
             {
-                // Immediately cancel & discard any in-progress speech capture without sending to Gemini
                 if (isCapturingUtterance)
                     ResetVadCapture();
-
-                SetLabel("🔇 MIC OFF (PRESS B)");
+                SetLabel("MIC OFF (PRESS B)");
                 evaluation?.NotifyMicrophoneMuted(true);
             }
             else
@@ -537,11 +465,11 @@ namespace Alterlife.Immersive
             if (hudMicStatusLabel != null)
             {
                 if (IsMicrophoneMuted)
-                    hudMicStatusLabel.text = "<color=#FCA5A5><b>MIC OFF</b></color> <size=78%><color=#E2E8F0>· Press B</color></size>";
+                    hudMicStatusLabel.text = "<color=#FCA5A5><b>MIC OFF</b></color> <size=78%><color=#F8FAFC>· Press B</color></size>";
                 else if (IsExploringCity)
-                    hudMicStatusLabel.text = "<color=#7DD3FC><b>● FOX GUIDE</b></color> <size=78%><color=#CBD5E1>· Press B</color></size>";
+                    hudMicStatusLabel.text = "<color=#7DD3FC><b>● FOX GUIDE</b></color> <size=78%><color=#E2E8F0>· Press B</color></size>";
                 else
-                    hudMicStatusLabel.text = "<color=#6EE7B7><b>● MIC ON</b></color> <size=78%><color=#CBD5E1>· Press B</color></size>";
+                    hudMicStatusLabel.text = "<color=#6EE7B7><b>● MIC ON</b></color> <size=78%><color=#E2E8F0>· Press B</color></size>";
             }
 
             if (hudMicStatusBacking != null)
@@ -563,14 +491,11 @@ namespace Alterlife.Immersive
             if (cafeAnchor == null) ResolveCafeAnchor();
 
             Vector3 anchorPos = cafeAnchor != null ? cafeAnchor.position : new Vector3(0f, 0f, 0.1f);
-            Vector2 playerXZ = new Vector2(cam.transform.position.x, cam.transform.position.z);
-            Vector2 anchorXZ = new Vector2(anchorPos.x, anchorPos.z);
-            float dist = Vector2.Distance(playerXZ, anchorXZ);
+            float dist = Vector2.Distance(
+                new Vector2(cam.transform.position.x, cam.transform.position.z),
+                new Vector2(anchorPos.x, anchorPos.z));
 
-            bool nextExploring = IsExploringCity
-                ? dist > cafeReturnRadius
-                : dist > cafeLeaveRadius;
-
+            bool nextExploring = IsExploringCity ? dist > cafeReturnRadius : dist > cafeLeaveRadius;
             if (nextExploring == IsExploringCity)
                 return;
 
@@ -583,20 +508,15 @@ namespace Alterlife.Immersive
         }
 
         // =====================================================================
-        // Local Acoustic Anti-Noise Human Voice Gate (Allows Single Words!)
+        // Local Acoustic Anti-Noise Human Voice Gate (Allows Single Words)
         // =====================================================================
 
-        /// <summary>
-        /// Evaluates a captured 16 kHz mono PCM buffer in &lt; 0.5 ms of pure C#.
-        /// Allows short 1-syllable French replies ("Oui", "Non", "Eau", "Thé", "Plate" &gt;= ~0.12s voiced)
-        /// while filtering out clicks, mic taps, coughs, breaths, and steady background noise.
-        /// </summary>
         public static bool PassesHumanSpeechFilter(float[] pcm, int sampleRate, float ambientFloor = 0.004f)
         {
             if (pcm == null || sampleRate <= 0)
                 return false;
 
-            int frameLen = Mathf.Max(64, sampleRate / 50); // 20 ms frames (320 samples @ 16 kHz)
+            int frameLen = Mathf.Max(64, sampleRate / 50);
             int totalFrames = pcm.Length / frameLen;
             if (totalFrames < 5)
                 return false;
@@ -651,26 +571,14 @@ namespace Alterlife.Immersive
                 }
             }
 
-            // 1. Minimum peak & active duration check:
-            // At least 5 voiced frames (100 ms) and at least 4 contiguous voiced frames (80 ms)
-            // so single-syllable words ("Oui", "Non", "Thé") pass, while <80 ms clicks/ticks fail.
             if (maxSampleAbs < 0.022f || voicedFrames < 5 || longestContiguousVoiced < 4 || totalVoicedEnergy <= 0f)
                 return false;
 
-            // 2. Impulsive transient rejection (mic bump / table knock / click):
-            // If > 62% of the entire clip's voiced energy is concentrated in a single 20 ms frame, it is an impulse.
-            float singleFrameEnergyRatio = maxFrameEnergy / totalVoicedEnergy;
-            if (singleFrameEnergyRatio > 0.62f)
+            if (maxFrameEnergy / totalVoicedEnergy > 0.62f)
                 return false;
 
-            // 3. Human vocal Zero-Crossing Rate (ZCR) window:
-            // Human voiced speech + fricatives @ 16 kHz averages between 0.015 (~120 Hz) and 0.42 (~3360 Hz).
-            // Pure wind/handling rumble (< 0.014) or pure high-frequency hiss (> 0.43) is rejected.
             float meanVoicedZcr = zcrSum / voicedFrames;
-            if (meanVoicedZcr < 0.014f || meanVoicedZcr > 0.43f)
-                return false;
-
-            return true;
+            return meanVoicedZcr >= 0.014f && meanVoicedZcr <= 0.43f;
         }
 
         // =====================================================================
@@ -734,10 +642,9 @@ namespace Alterlife.Immersive
                 yield break;
             }
 
-            Debug.Log("[ParisVoice] Continuous Gemini VAD started at " + micRingClip.frequency + " Hz.");
             lastReadSamplePos = 0;
             IsRecording = true;
-            SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "● LISTENING (FR)");
+            SetLabel(IsMicrophoneMuted ? "MIC OFF (PRESS B)" : "● LISTENING (FR)");
             RefreshHudMicVisual();
         }
 
@@ -755,7 +662,7 @@ namespace Alterlife.Immersive
 
             if (!HasGeminiKey)
             {
-                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "NO GEMINI API KEY");
+                SetLabel(IsMicrophoneMuted ? "MIC OFF (PRESS B)" : "NO GEMINI API KEY");
                 return;
             }
 
@@ -769,7 +676,7 @@ namespace Alterlife.Immersive
 
             if (IsMicrophoneMuted)
             {
-                SetLabel("🔇 MIC OFF (PRESS B)");
+                SetLabel("MIC OFF (PRESS B)");
                 return;
             }
 
@@ -818,7 +725,7 @@ namespace Alterlife.Immersive
 
             int readCount = Mathf.Min(delta, sampleScratch.Length);
             int startIdx = (currentPos - readCount + totalSamples) % totalSamples;
-            ReadRingSlice(startIdx, readCount, sampleScratch);
+            micRingClip.GetData(sampleScratch.AsSpan(0, readCount), startIdx);
             lastReadSamplePos = currentPos;
 
             float sumSq = 0f;
@@ -829,7 +736,6 @@ namespace Alterlife.Immersive
             }
             float rms = Mathf.Sqrt(sumSq / readCount);
             float dt = (float)readCount / SampleRate;
-
             float dynamicStartThreshold = Mathf.Max(vadStartRms, ambientNoiseFloor * 2.15f);
 
             if (!isCapturingUtterance)
@@ -860,10 +766,8 @@ namespace Alterlife.Immersive
                 utteranceLengthSeconds += dt;
                 SetLabel("● SPEAKING...");
 
-                if (rms < vadStopRms)
-                    silenceEndAccum += dt;
-                else
-                    silenceEndAccum = 0f;
+                if (rms < vadStopRms) silenceEndAccum += dt;
+                else silenceEndAccum = 0f;
 
                 if (silenceEndAccum >= endSilenceDuration || utteranceLengthSeconds >= maxUtteranceSeconds)
                 {
@@ -872,14 +776,12 @@ namespace Alterlife.Immersive
                     captureLen = Mathf.Clamp(captureLen, 1600, totalSamples - 16);
 
                     var pcm = new float[captureLen];
-                    ReadRingSlice(utteranceStartSample, captureLen, pcm);
+                    micRingClip.GetData(pcm.AsSpan(0, captureLen), utteranceStartSample);
                     ResetVadCapture();
 
-                    // Run local C# acoustic human-voice filter BEFORE spending a Gemini API call
                     if (!PassesHumanSpeechFilter(pcm, micRingClip.frequency, ambientNoiseFloor))
                     {
                         FilteredNoiseCount++;
-                        Debug.Log("[ParisVoice] Filtered ambient noise/transient — saved 1 Gemini API call.");
                         SetLabel(IsExploringCity ? "● FOX GUIDE" : "● LISTENING (FR)");
                         evaluation?.NotifyNoiseFiltered();
                         return;
@@ -890,11 +792,6 @@ namespace Alterlife.Immersive
                     requestRoutine = StartCoroutine(SendPayloadToGemini(wav, null));
                 }
             }
-        }
-
-        void ReadRingSlice(int startSample, int count, float[] dest)
-        {
-            micRingClip.GetData(dest.AsSpan(0, count), startSample);
         }
 
         void ResetVadCapture()
@@ -910,26 +807,6 @@ namespace Alterlife.Immersive
             }
         }
 
-        public void NotifyUserActivity() { }
-
-        public void ToggleRecording()
-        {
-            if (IsBusy) return;
-            if (IsMicrophoneMuted)
-            {
-                SetMicrophoneMuted(false);
-                return;
-            }
-            if (!HasGeminiKey)
-            {
-                SetLabel("NO GEMINI API KEY");
-                evaluation?.Feedback("Google AI Studio (Gemini) API key is required. Add Assets/Resources/GeminiLocalKey.txt.");
-                return;
-            }
-            if (!micBootstrapped)
-                vadBootstrapRoutine = StartCoroutine(EnsureMicrophoneRingRunning());
-        }
-
         public void SubmitTextToGemini(string userPhrase)
         {
             if (string.IsNullOrWhiteSpace(userPhrase) || IsBusy)
@@ -939,9 +816,7 @@ namespace Alterlife.Immersive
             {
                 var mocked = TestTurnHandler(userPhrase);
                 if (mocked != null)
-                {
                     ApplyParsedTurn(mocked, userPhrase);
-                }
                 return;
             }
 
@@ -995,27 +870,16 @@ namespace Alterlife.Immersive
             else
             {
                 userInstruction = wavBytes != null
-                    ? "Listen carefully to the player's audio clip (even a single French word like 'Oui', 'Non', 'Café', 'Plate', OR an English question). Transcribe accurately in userTranscript. PRIORITY ROUTING: If the player speaks in English, asks what the waiter/Lucas said, asks for a translation/explanation/meaning/help, or mixes French words into an English question (e.g. 'What did the waiter say?', 'What does quiche mean?', 'Can you explain?'), set speakerMode=\"fox_tutor\" and directly answer their question in English in foxTutorReplyEnglish. Otherwise, if they are speaking French to Lucas, set speakerMode=\"waiter\" and reply in natural French."
-                    : $"The player said: \"{textInput}\". PRIORITY ROUTING: If this is in English or asks what the waiter said / for translation / explanation / help (even with French words mixed in), set speakerMode=\"fox_tutor\" and directly answer in English in foxTutorReplyEnglish; otherwise if it is French for Lucas, set speakerMode=\"waiter\".";
+                    ? "Listen carefully to the player's audio clip (even a single French word like 'Oui', 'Non', 'Café', 'Plate', OR an English question). Transcribe accurately in userTranscript. PRIORITY ROUTING: If the player speaks in English, asks what the waiter/Lucas said, asks for a translation/explanation/meaning/help, or mixes French words into an English question, set speakerMode=\"fox_tutor\" and directly answer their question in English in foxTutorReplyEnglish. Otherwise, if they are speaking French to Lucas, set speakerMode=\"waiter\" and reply in natural French."
+                    : $"The player said: \"{textInput}\". PRIORITY ROUTING: If this is in English or asks what the waiter said / for translation / explanation / help, set speakerMode=\"fox_tutor\" and directly answer in English in foxTutorReplyEnglish; otherwise if it is French for Lucas, set speakerMode=\"waiter\".";
             }
 
-            string partsJson;
-            if (wavBytes != null)
-            {
-                string b64 = Convert.ToBase64String(wavBytes);
-                partsJson =
-                    $"{{\"text\":{JsonEscape(historySummary + "\n" + userInstruction)}}}," +
-                    $"{{\"inlineData\":{{\"mimeType\":\"audio/wav\",\"data\":\"{b64}\"}}}}";
-            }
-            else
-            {
-                partsJson = $"{{\"text\":{JsonEscape(historySummary + "\n" + userInstruction)}}}";
-            }
+            string partsJson = wavBytes != null
+                ? $"{{\"text\":{JsonEscape(historySummary + "\n" + userInstruction)}}},{{\"inlineData\":{{\"mimeType\":\"audio/wav\",\"data\":\"{Convert.ToBase64String(wavBytes)}\"}}}}"
+                : $"{{\"text\":{JsonEscape(historySummary + "\n" + userInstruction)}}}";
 
             var candidateModels = BuildModelChain(geminiChatModel, "gemini-3.5-flash-lite", ChatFallbackModels);
             string responseBody = null;
-            string lastError = null;
-            long lastCode = 0;
 
             for (int m = 0; m < candidateModels.Count; m++)
             {
@@ -1051,11 +915,9 @@ namespace Alterlife.Immersive
                         break;
                     }
 
-                    lastCode = request.responseCode;
-                    lastError = $"{request.error} - {request.downloadHandler?.text}";
-                    Debug.LogWarning($"[ParisVoice] Gemini chat ({model}) error {lastCode}: {lastError}");
-
-                    bool retryable = lastCode == 404 || lastCode == 429 || lastCode == 500 || lastCode == 503 || lastCode == 0;
+                    long code = request.responseCode;
+                    Debug.LogWarning($"[ParisVoice] Gemini chat ({model}) error {code}: {request.error}");
+                    bool retryable = code == 404 || code == 429 || code == 500 || code == 503 || code == 0;
                     if (!retryable)
                         break;
                 }
@@ -1066,7 +928,7 @@ namespace Alterlife.Immersive
 
             if (string.IsNullOrWhiteSpace(responseBody))
             {
-                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "GEMINI ERROR · RETRY");
+                SetLabel(IsMicrophoneMuted ? "MIC OFF (PRESS B)" : "GEMINI ERROR · RETRY");
                 evaluation.Feedback("Could not reach Google AI Studio (Gemini). Check your Wi-Fi connection and API key, then speak again.");
                 ResetVadCapture();
                 yield break;
@@ -1075,7 +937,7 @@ namespace Alterlife.Immersive
             GeminiWaiterTurn turn = ParseGeminiTurn(responseBody);
             if (turn == null)
             {
-                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "● LISTENING (FR)");
+                SetLabel(IsMicrophoneMuted ? "MIC OFF (PRESS B)" : "● LISTENING (FR)");
                 evaluation.Feedback("I did not catch that clearly. Please try speaking again.");
                 ResetVadCapture();
                 yield break;
@@ -1087,10 +949,9 @@ namespace Alterlife.Immersive
 
             bool isTutor = string.Equals(turn.speakerMode, "fox_tutor", StringComparison.OrdinalIgnoreCase);
 
-            // Deterministic C# safety net: never let Lucas hijack an explicit English question or a city-guide stroll
+            // Deterministic C# safety net for English questions or Paris exploration
             if (!isTutor && (promptContext.isExploringCity || RestaurantTutor.IsDefinitelyEnglishForFox(effectiveTranscript)))
             {
-                Debug.Log($"[ParisVoice] Overriding speakerMode to fox_tutor for transcript: \"{effectiveTranscript}\"");
                 turn.speakerMode = "fox_tutor";
                 isTutor = true;
                 turn.newlyCompletedMilestones = Array.Empty<string>();
@@ -1100,12 +961,11 @@ namespace Alterlife.Immersive
 
             if (isTutor && string.IsNullOrWhiteSpace(turn.foxTutorReplyEnglish))
             {
-                if (!string.IsNullOrWhiteSpace(turn.feedbackEnglish))
-                    turn.foxTutorReplyEnglish = turn.feedbackEnglish.Trim();
-                else if (evaluation != null && evaluation.Tutor != null)
-                    turn.foxTutorReplyEnglish = evaluation.Tutor.BuildFallbackEnglishTutorReply(effectiveTranscript);
-                else
-                    turn.foxTutorReplyEnglish = "Try speaking a short phrase in French to Lucas, or press Y for phrase cards.";
+                turn.foxTutorReplyEnglish = !string.IsNullOrWhiteSpace(turn.feedbackEnglish)
+                    ? turn.feedbackEnglish.Trim()
+                    : (evaluation.Tutor != null
+                        ? evaluation.Tutor.BuildFallbackEnglishTutorReply(effectiveTranscript)
+                        : "Try speaking a short phrase in French to Lucas, or press Y for phrase cards.");
             }
 
             bool hasReply = isTutor
@@ -1114,14 +974,14 @@ namespace Alterlife.Immersive
 
             if (!hasReply)
             {
-                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : (IsExploringCity ? "● FOX GUIDE READY" : "● LISTENING (FR)"));
+                SetLabel(IsMicrophoneMuted ? "MIC OFF (PRESS B)" : (IsExploringCity ? "● FOX GUIDE READY" : "● LISTENING (FR)"));
                 evaluation.Feedback("I could not hear clear speech. Please try speaking again.");
                 ResetVadCapture();
                 yield break;
             }
 
             ApplyParsedTurn(turn, textInput);
-            SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : (IsExploringCity ? "● FOX GUIDE READY" : "● LISTENING (FR)"));
+            SetLabel(IsMicrophoneMuted ? "MIC OFF (PRESS B)" : (IsExploringCity ? "● FOX GUIDE READY" : "● LISTENING (FR)"));
             ResetVadCapture();
         }
 
@@ -1210,11 +1070,8 @@ namespace Alterlife.Immersive
         }
 
         // =====================================================================
-        // Waiter Speech (Gemini TTS + RAM & Persistent Disk Cache)
-        // & Fox Speech (Alibaba Cloud Model Studio TTS: Qwen family -> Sambert backups)
+        // Waiter Speech (Gemini TTS) & Fox Speech (Alibaba Qwen -> Sambert TTS)
         // =====================================================================
-
-        public void Speak(string text, AudioClip prerecorded = null) => SpeakAsWaiter(text);
 
         public void SpeakAsWaiter(string frenchText)
         {
@@ -1228,7 +1085,6 @@ namespace Alterlife.Immersive
             string voiceTag = $"gemini_{voiceName}_fr";
             StopAllSpeech();
 
-            // 1. Check 0ms RAM Cache + ~2ms Persistent Disk Cache first (0 API calls!)
             if (TryLoadCachedClip(voiceTag, frenchText, out AudioClip cachedClip))
             {
                 speaker.clip = cachedClip;
@@ -1243,12 +1099,6 @@ namespace Alterlife.Immersive
             speechRoutine = StartCoroutine(SynthesizeWithGeminiTts(speaker, hash, voiceName, frenchText.Trim()));
         }
 
-        /// <summary>
-        /// Speaks using the Fox Companion's Alibaba Cloud Model Studio TTS (Singapore / ap-southeast-1):
-        /// starts with 'qwen3-tts-flash' (voice 'Cherry') and fails over through Qwen TTS and Sambert
-        /// backup models on quota exhaustion, backed by RAM + persistent disk WAV caching.
-        /// Strictly Alibaba-only: if all models fail or no key is configured, Fox displays text panels silently.
-        /// </summary>
         public void SpeakAsFox(string text, bool isFrenchModelPhrase, float speed = -1f)
         {
             string cleanText = RestaurantTutor.SanitizeForLocalSpeech(text);
@@ -1268,11 +1118,9 @@ namespace Alterlife.Immersive
 
             float resolvedSpeed = speed > 0f ? speed : (isFrenchModelPhrase ? 0.85f : 1.0f);
             int speedTag = Mathf.RoundToInt(resolvedSpeed * 100f);
-            string langTag = isFrenchModelPhrase ? "fr" : "en";
-            string voiceTag = $"alibaba_{resolvedVoice.ToLowerInvariant()}_{langTag}_{speedTag}";
+            string voiceTag = $"alibaba_{resolvedVoice.ToLowerInvariant()}_{(isFrenchModelPhrase ? "fr" : "en")}_{speedTag}";
             StopAllSpeech();
 
-            // 1. Check 0ms RAM Cache + ~2ms Persistent Disk Cache first (0 API calls!)
             if (TryLoadCachedClip(voiceTag, cleanText, out AudioClip cachedClip))
             {
                 target.clip = cachedClip;
@@ -1280,10 +1128,7 @@ namespace Alterlife.Immersive
                 return;
             }
 
-            if (Application.isBatchMode || !HasAlibabaKey)
-                return;
-
-            if (Application.internetReachability == NetworkReachability.NotReachable)
+            if (Application.isBatchMode || !HasAlibabaKey || Application.internetReachability == NetworkReachability.NotReachable)
                 return;
 
             string hash = ComputeTtsCacheHash(voiceTag, cleanText);
@@ -1304,31 +1149,19 @@ namespace Alterlife.Immersive
 
             var result = new AlibabaTtsClient.SynthesisOutput();
             yield return alibabaTts.SynthesizeWithFailover(
-                apiKey,
-                alibabaWorkspaceId,
-                alibabaPrimaryModel,
-                voiceName,
-                text,
-                isFrench,
-                speed,
-                result);
+                apiKey, alibabaWorkspaceId, alibabaPrimaryModel, voiceName, text, isFrench, speed, result);
 
             isSynthesizingSpeech = false;
             isSynthesizingFoxSpeech = false;
             speechRoutine = null;
 
             if (!result.Success || result.Clip == null || target == null)
-            {
-                // Strict Alibaba-only policy: do not fall back to Gemini or clutter the visual panels;
-                // the Fox smoothly stays silent while its hint/tutor/card panels remain readable.
                 yield break;
-            }
 
             CacheTtsClipInRam(cacheHash, result.Clip);
             if (result.WavBytesForDiskCache != null && result.WavBytesForDiskCache.Length >= 44)
                 SaveWavToDiskCache(cacheHash, result.WavBytesForDiskCache);
 
-            evaluation?.companion?.ShowVoiceDiagnostic("");
             target.clip = result.Clip;
             target.Play();
         }
@@ -1356,10 +1189,7 @@ namespace Alterlife.Immersive
         IEnumerator SynthesizeWithGeminiTts(AudioSource target, string cacheHash, string voiceName, string verbatimText)
         {
             string apiKey = ResolveGeminiKey();
-            if (string.IsNullOrWhiteSpace(apiKey) || target == null)
-                yield break;
-
-            if (Application.internetReachability == NetworkReachability.NotReachable)
+            if (string.IsNullOrWhiteSpace(apiKey) || target == null || Application.internetReachability == NetworkReachability.NotReachable)
                 yield break;
 
             isSynthesizingSpeech = true;
@@ -1423,13 +1253,10 @@ namespace Alterlife.Immersive
                             if (clip != null)
                             {
                                 CacheTtsClipInRam(cacheHash, clip);
-
-                                // Persist WAV to disk so future repetitions/sessions load in ~2ms with 0 API calls
                                 bool isAlreadyRiffWav = rawAudio.Length >= 44 &&
                                     rawAudio[0] == (byte)'R' && rawAudio[1] == (byte)'I' &&
                                     rawAudio[2] == (byte)'F' && rawAudio[3] == (byte)'F';
-                                byte[] wavForDisk = isAlreadyRiffWav ? rawAudio : EncodeWav(floatSamples, 1, decodedRate);
-                                SaveWavToDiskCache(cacheHash, wavForDisk);
+                                SaveWavToDiskCache(cacheHash, isAlreadyRiffWav ? rawAudio : EncodeWav(floatSamples, 1, decodedRate));
 
                                 target.clip = clip;
                                 target.Play();
@@ -1450,8 +1277,7 @@ namespace Alterlife.Immersive
 
         void CacheTtsClipInRam(string key, AudioClip clip)
         {
-            if (string.IsNullOrWhiteSpace(key) || clip == null) return;
-            if (ttsCache.ContainsKey(key)) return;
+            if (string.IsNullOrWhiteSpace(key) || clip == null || ttsCache.ContainsKey(key)) return;
             ttsCache[key] = clip;
             ttsCacheOrder.Enqueue(key);
 
@@ -1464,9 +1290,7 @@ namespace Alterlife.Immersive
                     if (oldClip != null &&
                         (speaker == null || speaker.clip != oldClip) &&
                         (foxSpeaker == null || foxSpeaker.clip != oldClip))
-                    {
                         Destroy(oldClip);
-                    }
                 }
             }
         }
@@ -1521,8 +1345,7 @@ namespace Alterlife.Immersive
                 }
             }
 
-            int totalSamples = dataLength / 2;
-            int framesPerChannel = totalSamples / channels;
+            int framesPerChannel = (dataLength / 2) / channels;
             if (framesPerChannel <= 0)
                 return null;
 
@@ -1548,24 +1371,20 @@ namespace Alterlife.Immersive
                 : fallback;
         }
 
-        public void Practice(string text)
-        {
-            SubmitTextToGemini(text);
-        }
-
         void SetLabel(string value)
         {
             if (microphoneLabel != null)
                 microphoneLabel.text = value;
         }
 
-        public void ResetConversation()
+        void StopMicAndActiveRequests()
         {
             if (!string.IsNullOrEmpty(device) && Microphone.IsRecording(device))
                 Microphone.End(device);
 
             IsRecording = IsBusy = false;
             micBootstrapped = false;
+
             if (operationRequest != null)
             {
                 operationRequest.Abort();
@@ -1586,6 +1405,11 @@ namespace Alterlife.Immersive
 
             if (micRingClip) Destroy(micRingClip);
             micRingClip = null;
+        }
+
+        public void ResetConversation()
+        {
+            StopMicAndActiveRequests();
             history.Clear();
             LastTranscript = null;
             ResetVadCapture();
@@ -1596,47 +1420,22 @@ namespace Alterlife.Immersive
 
             if (!HasGeminiKey)
             {
-                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "NO GEMINI API KEY");
+                SetLabel(IsMicrophoneMuted ? "MIC OFF (PRESS B)" : "NO GEMINI API KEY");
                 return;
             }
 
             if (autoListenVad && isActiveAndEnabled && gameObject.activeInHierarchy)
             {
-                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "STARTING MICROPHONE");
+                SetLabel(IsMicrophoneMuted ? "MIC OFF (PRESS B)" : "STARTING MICROPHONE");
                 vadBootstrapRoutine = StartCoroutine(EnsureMicrophoneRingRunning());
             }
             else
             {
-                SetLabel(IsMicrophoneMuted ? "🔇 MIC OFF (PRESS B)" : "● READY");
+                SetLabel(IsMicrophoneMuted ? "MIC OFF (PRESS B)" : "● READY");
             }
         }
 
-        void OnDisable()
-        {
-            if (!string.IsNullOrEmpty(device) && Microphone.IsRecording(device))
-                Microphone.End(device);
-            IsRecording = IsBusy = false;
-            micBootstrapped = false;
-            if (operationRequest != null)
-            {
-                operationRequest.Abort();
-                operationRequest.Dispose();
-                operationRequest = null;
-            }
-            if (requestRoutine != null)
-            {
-                StopCoroutine(requestRoutine);
-                requestRoutine = null;
-            }
-            if (vadBootstrapRoutine != null)
-            {
-                StopCoroutine(vadBootstrapRoutine);
-                vadBootstrapRoutine = null;
-            }
-            StopAllSpeech();
-            if (micRingClip) Destroy(micRingClip);
-            micRingClip = null;
-        }
+        void OnDisable() => StopMicAndActiveRequests();
 
         void OnDestroy()
         {
@@ -1648,13 +1447,14 @@ namespace Alterlife.Immersive
             ttsCacheOrder.Clear();
         }
 
-        static string JsonEscape(string value)
+        public static string JsonEscape(string value)
         {
             if (value == null) return "\"\"";
             var sb = new StringBuilder(value.Length + 8);
             sb.Append('"');
-            foreach (char c in value)
+            for (int i = 0; i < value.Length; i++)
             {
+                char c = value[i];
                 switch (c)
                 {
                     case '"': sb.Append("\\\""); break;
@@ -1665,7 +1465,7 @@ namespace Alterlife.Immersive
                     case '\r': sb.Append("\\r"); break;
                     case '\t': sb.Append("\\t"); break;
                     default:
-                        if (c < ' ') sb.AppendFormat("\\u{0:X4}", (int)c);
+                        if (c < ' ') sb.AppendFormat(CultureInfo.InvariantCulture, "\\u{0:X4}", (int)c);
                         else sb.Append(c);
                         break;
                 }

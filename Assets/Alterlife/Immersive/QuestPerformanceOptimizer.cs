@@ -86,13 +86,9 @@ namespace Alterlife.Immersive
 #endif
 
             var origin = FindAnyObjectByType<XROrigin>();
-            if (origin != null)
+            if (origin != null && origin.Camera != null && maxFarClip > 20f && origin.Camera.farClipPlane > maxFarClip)
             {
-                ComfortOptions.ApplySavedPosture(origin);
-                if (origin.Camera != null && maxFarClip > 20f && origin.Camera.farClipPlane > maxFarClip)
-                {
-                    origin.Camera.farClipPlane = maxFarClip;
-                }
+                origin.Camera.farClipPlane = maxFarClip;
             }
         }
 
@@ -109,7 +105,7 @@ namespace Alterlife.Immersive
 
                 try
                 {
-                    display.foveatedRenderingFlags = XRDisplaySubsystem.FoveatedRenderingFlags.GazeAllowed;
+                    display.foveatedRenderingFlags = XRDisplaySubsystem.FoveatedRenderingFlags.None;
                     display.foveatedRenderingLevel = ffrLevel;
                 }
                 catch (Exception)

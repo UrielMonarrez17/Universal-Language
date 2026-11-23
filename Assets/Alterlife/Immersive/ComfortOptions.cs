@@ -1,29 +1,23 @@
-using System.Collections.Generic;
 using TMPro;
 using Unity.XR.CoreUtils;
 using UnityEngine;
-using UnityEngine.XR;
 using UnityEngine.XR.Interaction.Toolkit.Samples.StarterAssets;
 
 namespace Alterlife.Immersive
 {
+    /// <summary>
+    /// Persists the player's chosen locomotion mode (Smooth vs Teleport) across all Alterlife scenes.
+    /// </summary>
     public sealed class ComfortOptions : MonoBehaviour
     {
-        const string SeatedPrefKey = "Alterlife.Comfort.Seated";
         const string SmoothMovePrefKey = "Alterlife.Comfort.SmoothMove";
         public static bool PersistenceEnabled = true;
 
         public ControllerInputActionManager leftController;
         public TMP_Text label;
-
-        [Header("Posture & Height Calibration")]
-        public TMP_Text postureLabel;
         public XROrigin xrOrigin;
-        public float seatedHeightOffset = 0.40f;
-        [Tooltip("Default locomotion mode when the player has not explicitly toggled Teleport in the wrist menu.")]
         public bool defaultSmoothMovement = true;
 
-        public bool IsSeatedMode { get; private set; }
         public bool IsSmoothMovementEnabled =>
             leftController != null
                 ? leftController.smoothMotionEnabled
@@ -41,9 +35,6 @@ namespace Alterlife.Immersive
         {
             ResolveReferences();
             ApplySavedMovementMode();
-
-            IsSeatedMode = PersistenceEnabled && PlayerPrefs.GetInt(SeatedPrefKey, 0) == 1;
-            ApplyPosture(IsSeatedMode);
             Refresh();
         }
 
@@ -67,19 +58,16 @@ namespace Alterlife.Immersive
 
         public void ApplySavedMovementMode()
         {
-            if (leftController == null)
-                return;
-
+            if (leftController == null) return;
             int defaultVal = defaultSmoothMovement ? 1 : 0;
-            bool smooth = PersistenceEnabled
+            leftController.smoothMotionEnabled = PersistenceEnabled
                 ? PlayerPrefs.GetInt(SmoothMovePrefKey, defaultVal) == 1
                 : defaultSmoothMovement;
-            leftController.smoothMotionEnabled = smooth;
         }
 
         public void ToggleSmoothMovement()
         {
-            if (leftController)
+            if (leftController != null)
             {
                 bool next = !leftController.smoothMotionEnabled;
                 leftController.smoothMotionEnabled = next;
@@ -92,55 +80,6 @@ namespace Alterlife.Immersive
             Refresh();
         }
 
-        public void TogglePosture()
-        {
-            IsSeatedMode = !IsSeatedMode;
-            if (PersistenceEnabled)
-            {
-                PlayerPrefs.SetInt(SeatedPrefKey, IsSeatedMode ? 1 : 0);
-                PlayerPrefs.Save();
-            }
-
-            ApplyPosture(IsSeatedMode);
-            RecenterView();
-            Refresh();
-        }
-
-        public void RecenterView()
-        {
-            var inputs = new List<XRInputSubsystem>();
-            SubsystemManager.GetSubsystems(inputs);
-            foreach (var input in inputs)
-            {
-                if (input != null && input.running)
-                    input.TryRecenter();
-            }
-        }
-
-        public static void ApplySavedPosture(XROrigin origin, float seatedOffset = 0.40f)
-        {
-            if (origin == null || origin.CameraFloorOffsetObject == null)
-                return;
-
-            bool seated = PersistenceEnabled && PlayerPrefs.GetInt(SeatedPrefKey, 0) == 1;
-            var offsetTransform = origin.CameraFloorOffsetObject.transform;
-            var pos = offsetTransform.localPosition;
-            offsetTransform.localPosition = new Vector3(pos.x, seated ? seatedOffset : 0f, pos.z);
-        }
-
-        void ApplyPosture(bool seated)
-        {
-            if (xrOrigin == null)
-                xrOrigin = FindAnyObjectByType<XROrigin>();
-
-            if (xrOrigin == null || xrOrigin.CameraFloorOffsetObject == null)
-                return;
-
-            var offsetTransform = xrOrigin.CameraFloorOffsetObject.transform;
-            var pos = offsetTransform.localPosition;
-            offsetTransform.localPosition = new Vector3(pos.x, seated ? seatedHeightOffset : 0f, pos.z);
-        }
-
         void Refresh()
         {
             if (label && leftController)
@@ -148,11 +87,6 @@ namespace Alterlife.Immersive
                 label.text = leftController.smoothMotionEnabled
                     ? "MOVEMENT: SMOOTH\nLeft stick to walk • Right stick to teleport\nSelect to use teleport only"
                     : "MOVE FREELY\nWalk within your play area.\nPush stick forward, aim at floor, release to teleport.\nSelect for optional smooth movement.";
-            }
-
-            if (postureLabel)
-            {
-                postureLabel.text = IsSeatedMode ? "POSTURE: SEATED" : "POSTURE: STANDING";
             }
         }
     }

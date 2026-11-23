@@ -1,10 +1,8 @@
-using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.XR.Interaction.Toolkit;
 using UnityEngine.XR.Interaction.Toolkit.Interactables;
-using UnityEngine.XR.Interaction.Toolkit.Locomotion.Teleportation;
 
 namespace Alterlife.Immersive
 {
@@ -17,17 +15,14 @@ namespace Alterlife.Immersive
         public GameObject label;
         public GameObject confirmControl;
         public TMP_Text status;
-        public StudyDoor door;
         public Transform marker;
         public GameObject markerTooltip;
-        public Transform bookArrival;
-        public TeleportationProvider teleportation;
         public bool travelOnSelection = true;
         public SceneJourney sceneJourney;
-        public static bool ReturnToBookRequested;
+
+        public bool Pending { get; private set; }
 
         bool travelling;
-        public bool Pending { get; private set; }
         bool hovered;
         Camera viewer;
         PhysicalPokeFilter pokeFilter;
@@ -41,7 +36,6 @@ namespace Alterlife.Immersive
         {
             viewer = Camera.main;
             flagPropertyBlock = new MaterialPropertyBlock();
-
             CacheFlagRenderers();
 
             if (country != null)
@@ -59,42 +53,26 @@ namespace Alterlife.Immersive
                 session.Changed += Refresh;
 
             Refresh();
-
-            if (ReturnToBookRequested)
-            {
-                ReturnToBookRequested = false;
-                if (session != null && session.FranceSelected)
-                    StartCoroutine(TravelToBook());
-            }
         }
 
         void CacheFlagRenderers()
         {
             flagRenderers.Clear();
             flagBaseColors.Clear();
-
-            if (marker == null)
-                return;
+            if (marker == null) return;
 
             markerBaseScale = marker.localScale;
             AddRenderersFrom(marker);
 
-            if (marker.parent != null)
-            {
-                Transform stem = marker.parent.Find("France pin stem");
-                if (stem != null)
-                    AddRenderersFrom(stem);
-            }
+            Transform stem = marker.parent != null ? marker.parent.Find("France pin stem") : null;
+            if (stem != null) AddRenderersFrom(stem);
         }
 
         void AddRenderersFrom(Transform root)
         {
             foreach (var r in root.GetComponentsInChildren<Renderer>(true))
             {
-                if (r == null || r.GetComponent<TMP_Text>() != null)
-                    continue;
-
-                if (flagRenderers.Contains(r))
+                if (r == null || r.GetComponent<TMP_Text>() != null || flagRenderers.Contains(r))
                     continue;
 
                 Color baseColor = r.sharedMaterial != null && r.sharedMaterial.HasProperty("_BaseColor")
@@ -111,7 +89,6 @@ namespace Alterlife.Immersive
 
         void LateUpdate()
         {
-            // Location remains attached to France, while the flag stays legible from either controller/hand.
             if (!viewer) viewer = Camera.main;
             if (marker && viewer)
             {
@@ -141,10 +118,8 @@ namespace Alterlife.Immersive
 
         void Select(SelectEnterEventArgs args)
         {
-            if (PhysicalControl.IsControllerGripOnly(args.interactorObject))
-                return;
-
-            TargetFrance();
+            if (!PhysicalControl.IsControllerGripOnly(args.interactorObject))
+                TargetFrance();
         }
 
         void Activate(ActivateEventArgs _) => TargetFrance();
@@ -162,35 +137,11 @@ namespace Alterlife.Immersive
             if (session != null) session.SelectFrance();
             Pending = false;
             Refresh();
-            if (sceneJourney) { travelling = true; sceneJourney.OpenBook(); }
-            else if (travelOnSelection && bookArrival && teleportation && !travelling) StartCoroutine(TravelToBook());
-        }
-
-        IEnumerator TravelToBook()
-        {
-            if (!bookArrival || !teleportation || travelling) yield break;
-            travelling = true;
-            var fade = viewer ? viewer.GetComponent<HeadCollisionFade>() : null;
-            for (float t = 0; t < .18f; t += Time.unscaledDeltaTime)
+            if (sceneJourney)
             {
-                if (fade) fade.TransitionOpacity = t / .18f;
-                yield return null;
+                travelling = true;
+                sceneJourney.OpenBook();
             }
-            if (fade) fade.TransitionOpacity = 1;
-            teleportation.QueueTeleportRequest(new TeleportRequest
-            {
-                destinationPosition = bookArrival.position,
-                destinationRotation = bookArrival.rotation,
-                matchOrientation = MatchOrientation.TargetUpAndForward
-            });
-            yield return new WaitForSecondsRealtime(.15f);
-            for (float t = 0; t < .25f; t += Time.unscaledDeltaTime)
-            {
-                if (fade) fade.TransitionOpacity = 1 - t / .25f;
-                yield return null;
-            }
-            if (fade) fade.TransitionOpacity = 0;
-            travelling = false;
         }
 
         void Refresh()
@@ -207,23 +158,18 @@ namespace Alterlife.Immersive
 
             if (status && session != null)
             {
-                status.text = "France\nLanguage: French\nLanguage Progress: " + Mathf.RoundToInt(session.LanguageProgress * 100) + "%" +
-                    (selected ? "\nStudy unlocked — welcome in" : travelOnSelection ? "\nTrigger or pinch France to visit the book" : "\nSelect France, then confirm");
+                int pct = Mathf.RoundToInt(session.LanguageProgress * 100);
+                status.text = $"France\nLanguage: French\nLanguage Progress: {pct}%" +
+                    (selected ? "\nStudy unlocked — select France to open the book" : "\nTrigger or pinch France to visit the book");
             }
-
-            if (selected && door) door.Unlock();
         }
 
         void UpdateFlagHighlight(bool activeHoverOrPending, bool selected)
         {
             if (marker != null)
-            {
-                float scaleFactor = activeHoverOrPending ? 1.22f : (selected ? 1.1f : 1.0f);
-                marker.localScale = markerBaseScale * scaleFactor;
-            }
+                marker.localScale = markerBaseScale * (activeHoverOrPending ? 1.22f : (selected ? 1.1f : 1.0f));
 
-            if (flagPropertyBlock == null)
-                return;
+            if (flagPropertyBlock == null) return;
 
             bool glow = activeHoverOrPending || selected;
             Color warmGlow = new Color(1f, 0.92f, 0.58f, 1f);
@@ -237,12 +183,9 @@ namespace Alterlife.Immersive
                 Color tinted = activeHoverOrPending
                     ? Color.Lerp(baseColor, warmGlow, 0.42f)
                     : (selected ? Color.Lerp(baseColor, warmGlow, 0.2f) : baseColor);
+                float strength = activeHoverOrPending ? 0.75f : 0.35f;
                 Color emission = glow
-                    ? new Color(
-                        Mathf.Max(tinted.r, 0.25f) * (activeHoverOrPending ? 0.75f : 0.35f),
-                        Mathf.Max(tinted.g, 0.25f) * (activeHoverOrPending ? 0.75f : 0.35f),
-                        Mathf.Max(tinted.b, 0.25f) * (activeHoverOrPending ? 0.75f : 0.35f),
-                        1f)
+                    ? new Color(Mathf.Max(tinted.r, 0.25f) * strength, Mathf.Max(tinted.g, 0.25f) * strength, Mathf.Max(tinted.b, 0.25f) * strength, 1f)
                     : Color.black;
 
                 flagPropertyBlock.SetColor("_BaseColor", tinted);

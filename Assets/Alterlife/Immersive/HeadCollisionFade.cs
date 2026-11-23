@@ -39,7 +39,8 @@ namespace Alterlife.Immersive
 
                 if (hit.GetComponentInParent<XRBaseInteractor>() != null ||
                     hit.GetComponentInParent<WristMenuController>() != null ||
-                    hit.GetComponentInParent<HummingbirdCompanion>() != null)
+                    hit.GetComponentInParent<HummingbirdCompanion>() != null ||
+                    hit.GetComponentInParent<VrBriefingOverlay>() != null)
                 {
                     continue;
                 }

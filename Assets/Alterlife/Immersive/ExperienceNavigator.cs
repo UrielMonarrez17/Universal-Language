@@ -12,6 +12,7 @@ namespace Alterlife.Immersive
         public TMP_Text selectionText;
         public GameObject confirmControl;
         public Renderer selectionSeal;
+        public VrBriefingOverlay parisTransitionBriefing;
         public ExperienceDefinition Selected { get; private set; }
         public event System.Action SelectionChanged;
         public bool IsPreparing => preparation.activeSelf;
@@ -47,7 +48,13 @@ namespace Alterlife.Immersive
             session.Save();
             if (!string.IsNullOrWhiteSpace(Selected.scenePath) && Application.CanStreamedLevelBeLoaded(Selected.scenePath))
             {
-                SceneManager.LoadSceneAsync(Selected.scenePath);
+                if (parisTransitionBriefing == null)
+                    parisTransitionBriefing = FindAnyObjectByType<VrBriefingOverlay>(FindObjectsInactive.Include);
+
+                if (parisTransitionBriefing != null && !Application.isBatchMode)
+                    parisTransitionBriefing.BeginSceneTransition(Selected.scenePath);
+                else
+                    SceneManager.LoadSceneAsync(Selected.scenePath);
                 return;
             }
             preparationText.text = Selected.displayName + "\n\nCOMING SOON\n" + Selected.description +

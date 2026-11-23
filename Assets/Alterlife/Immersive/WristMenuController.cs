@@ -8,10 +8,8 @@ using UnityEngine.XR.Interaction.Toolkit.Interactors;
 namespace Alterlife.Immersive
 {
     /// <summary>
-    /// Minimalist Left-Wrist Menu that tracks either the Left Controller or Left Hand (depending on active modality).
+    /// Minimalist Left-Wrist Menu that tracks either the Left Controller or Left Hand.
     /// Displays when looking at the inner wrist (like a watch) OR toggled via the Left Controller X button.
-    /// Houses Movement Mode, Posture (Standing/Seated), Return to Previous Scene (hidden in ImmersiveHub),
-    /// and Paris-only quick actions (Fox Help & Restart Conversation).
     /// </summary>
     public sealed class WristMenuController : MonoBehaviour
     {
@@ -20,7 +18,7 @@ namespace Alterlife.Immersive
         [SerializeField] private QuestMultimodalRig multimodalRig;
         [SerializeField] private GameObject menuCanvas;
         [SerializeField] private float activationAngle = 52f;
-        [SerializeField] private bool forceVisibleForDebug = false;
+        [SerializeField] private bool forceVisibleForDebug;
 
         [Header("Wrist Attachment Offsets")]
         [SerializeField] private Vector3 controllerLocalOffset = new Vector3(0.02f, 0.055f, -0.04f);
@@ -34,48 +32,34 @@ namespace Alterlife.Immersive
 
         [Header("Buttons & Labels")]
         [SerializeField] private TMP_Text movementStatusText;
-        [SerializeField] private TMP_Text seatedStandingStatusText;
         [SerializeField] private GameObject returnButtonObject;
         [SerializeField] private TMP_Text returnButtonText;
         [SerializeField] private GameObject foxHelpButtonObject;
         [SerializeField] private GameObject restartButtonObject;
 
-        private bool pinnedOpenByButton;
-        private bool wasLeftXPressed;
-        private bool isVisible = true;
-        private float visibleSince;
-        private readonly List<Renderer> cachedRenderers = new List<Renderer>();
-        private readonly List<Collider> cachedColliders = new List<Collider>();
-        private readonly List<TMP_Text> cachedTexts = new List<TMP_Text>();
+        bool pinnedOpenByButton;
+        bool wasLeftXPressed;
+        bool isVisible = true;
+        float visibleSince;
+        readonly List<Renderer> cachedRenderers = new List<Renderer>();
+        readonly List<Collider> cachedColliders = new List<Collider>();
+        readonly List<TMP_Text> cachedTexts = new List<TMP_Text>();
 
-        private void Awake()
+        void Awake()
         {
-            if (menuCanvas == null)
-                menuCanvas = gameObject;
-
+            if (menuCanvas == null) menuCanvas = gameObject;
             CacheVisualComponents();
             SetMenuVisible(false);
         }
 
-        private void Start()
+        void Start()
         {
-            if (headCamera == null && Camera.main != null)
-                headCamera = Camera.main.transform;
-
-            if (multimodalRig == null)
-                multimodalRig = FindAnyObjectByType<QuestMultimodalRig>();
-
-            if (comfortOptions == null)
-                comfortOptions = FindAnyObjectByType<ComfortOptions>(FindObjectsInactive.Include);
-
-            if (sceneJourney == null)
-                sceneJourney = FindAnyObjectByType<SceneJourney>(FindObjectsInactive.Include);
-
-            if (restaurantEvaluation == null)
-                restaurantEvaluation = FindAnyObjectByType<RestaurantEvaluation>(FindObjectsInactive.Include);
-
-            if (companion == null)
-                companion = FindAnyObjectByType<HummingbirdCompanion>(FindObjectsInactive.Include);
+            if (headCamera == null && Camera.main != null) headCamera = Camera.main.transform;
+            if (multimodalRig == null) multimodalRig = FindAnyObjectByType<QuestMultimodalRig>();
+            if (comfortOptions == null) comfortOptions = FindAnyObjectByType<ComfortOptions>(FindObjectsInactive.Include);
+            if (sceneJourney == null) sceneJourney = FindAnyObjectByType<SceneJourney>(FindObjectsInactive.Include);
+            if (restaurantEvaluation == null) restaurantEvaluation = FindAnyObjectByType<RestaurantEvaluation>(FindObjectsInactive.Include);
+            if (companion == null) companion = FindAnyObjectByType<HummingbirdCompanion>(FindObjectsInactive.Include);
 
             ConfigureSceneButtons();
             RefreshLabels();
@@ -87,24 +71,14 @@ namespace Alterlife.Immersive
             cachedRenderers.Clear();
             cachedColliders.Clear();
             cachedTexts.Clear();
-
             if (menuCanvas == null) return;
 
             foreach (var r in menuCanvas.GetComponentsInChildren<Renderer>(true))
-            {
-                if (r != null && r.GetComponent<TMP_Text>() == null)
-                    cachedRenderers.Add(r);
-            }
+                if (r != null && r.GetComponent<TMP_Text>() == null) cachedRenderers.Add(r);
             foreach (var c in menuCanvas.GetComponentsInChildren<Collider>(true))
-            {
-                if (c != null)
-                    cachedColliders.Add(c);
-            }
+                if (c != null) cachedColliders.Add(c);
             foreach (var t in menuCanvas.GetComponentsInChildren<TMP_Text>(true))
-            {
-                if (t != null)
-                    cachedTexts.Add(t);
-            }
+                if (t != null) cachedTexts.Add(t);
         }
 
         void ConfigureSceneButtons()
@@ -120,28 +94,15 @@ namespace Alterlife.Immersive
                 if (returnButtonText != null)
                     returnButtonText.text = isParis ? "BACK TO BOOK" : (isBook ? "BACK TO GLOBE" : "BACK");
             }
-
-            if (foxHelpButtonObject != null)
-                foxHelpButtonObject.SetActive(isParis);
-
-            if (restartButtonObject != null)
-                restartButtonObject.SetActive(isParis);
-
-            // Ensure legacy posture toggle button is permanently hidden if still present in hierarchy
-            if (seatedStandingStatusText != null && seatedStandingStatusText.transform.parent != null)
-            {
-                Transform btn = seatedStandingStatusText.transform.parent;
-                if (btn.name.IndexOf("posture", System.StringComparison.OrdinalIgnoreCase) >= 0)
-                    btn.gameObject.SetActive(false);
-            }
+            if (foxHelpButtonObject != null) foxHelpButtonObject.SetActive(isParis);
+            if (restartButtonObject != null) restartButtonObject.SetActive(isParis);
         }
 
-        private void LateUpdate()
+        void LateUpdate()
         {
-            if (headCamera == null && Camera.main != null)
-                headCamera = Camera.main.transform;
+            if (headCamera == null && Camera.main != null) headCamera = Camera.main.transform;
 
-            var wrist = FollowActiveLeftWrist();
+            Transform wrist = FollowActiveLeftWrist();
             PollLeftControllerXButton();
 
             if (menuCanvas == null || headCamera == null || !wrist)
@@ -152,7 +113,6 @@ namespace Alterlife.Immersive
 
             Vector3 fromHead = transform.position - headCamera.position;
             if (fromHead.sqrMagnitude < 0.0001f) { SetMenuVisible(false); return; }
-            // Labels and buttons sit on the panel's negative Z face.
             transform.rotation = Quaternion.LookRotation(fromHead, headCamera.up);
 
             if (forceVisibleForDebug || pinnedOpenByButton)
@@ -167,8 +127,7 @@ namespace Alterlife.Immersive
 
         Transform FollowActiveLeftWrist()
         {
-            if (multimodalRig == null)
-                return null;
+            if (multimodalRig == null) return null;
 
             bool useController = multimodalRig.ControllersActive;
             GameObject target = useController ? multimodalRig.leftController : multimodalRig.leftHand;
@@ -177,13 +136,9 @@ namespace Alterlife.Immersive
                 target = useController ? multimodalRig.leftHand : multimodalRig.leftController;
                 useController = !useController;
             }
+            if (target == null || !target.activeInHierarchy) return null;
 
-            if (target == null || !target.activeInHierarchy)
-                return null;
-
-            Vector3 localPos = useController ? controllerLocalOffset : handLocalOffset;
-
-            transform.position = target.transform.TransformPoint(localPos);
+            transform.position = target.transform.TransformPoint(useController ? controllerLocalOffset : handLocalOffset);
             return target.transform;
         }
 
@@ -191,7 +146,8 @@ namespace Alterlife.Immersive
         {
             if (!isVisible || Time.unscaledTime - visibleSince < .25f || !multimodalRig ||
                 !(interactor is XRBaseInputInteractor input)) return false;
-            var t = input.transform;
+
+            Transform t = input.transform;
             bool onRight = (multimodalRig.rightHand && t.IsChildOf(multimodalRig.rightHand.transform)) ||
                            (multimodalRig.rightController && t.IsChildOf(multimodalRig.rightController.transform));
             return onRight && (activated ? input.activateInput : input.selectInput).ReadWasPerformedThisFrame();
@@ -200,112 +156,58 @@ namespace Alterlife.Immersive
         void PollLeftControllerXButton()
         {
             InputDevice leftDevice = InputDevices.GetDeviceAtXRNode(XRNode.LeftHand);
-            if (!leftDevice.isValid)
-            {
-                wasLeftXPressed = false;
-                return;
-            }
+            if (!leftDevice.isValid) { wasLeftXPressed = false; return; }
 
             bool xPressed = leftDevice.TryGetFeatureValue(CommonUsages.primaryButton, out bool pressed) && pressed;
             if (xPressed && !wasLeftXPressed)
-            {
                 pinnedOpenByButton = !pinnedOpenByButton;
-            }
             wasLeftXPressed = xPressed;
         }
 
         void SetMenuVisible(bool visible)
         {
-            if (isVisible == visible)
-                return;
-
+            if (isVisible == visible) return;
             isVisible = visible;
-            if (visible)
-            {
-                visibleSince = Time.unscaledTime;
-                RefreshLabels();
-            }
+            if (visible) { visibleSince = Time.unscaledTime; RefreshLabels(); }
 
-            // Keep GameObjects active in hierarchy so scene queries/validations continue to find controls cleanly.
             for (int i = 0; i < cachedRenderers.Count; i++)
                 if (cachedRenderers[i] != null) cachedRenderers[i].enabled = visible;
-
             for (int i = 0; i < cachedColliders.Count; i++)
                 if (cachedColliders[i] != null) cachedColliders[i].enabled = visible;
-
             for (int i = 0; i < cachedTexts.Count; i++)
                 if (cachedTexts[i] != null) cachedTexts[i].enabled = visible;
         }
 
         public void ToggleMovementMode()
         {
-            if (comfortOptions != null)
-                comfortOptions.ToggleSmoothMovement();
-            RefreshLabels();
-        }
-
-        public void ToggleSeatedStandingMode()
-        {
-            if (comfortOptions != null)
-                comfortOptions.TogglePosture();
+            if (comfortOptions != null) comfortOptions.ToggleSmoothMovement();
             RefreshLabels();
         }
 
         public void ReturnToPreviousScene()
         {
-            if (restaurantEvaluation != null)
-            {
-                restaurantEvaluation.ReturnToBook();
-                return;
-            }
-
-            if (sceneJourney != null && sceneJourney.bookRoom)
-            {
-                sceneJourney.OpenWorld();
-                return;
-            }
-
+            if (restaurantEvaluation != null) { restaurantEvaluation.ReturnToBook(); return; }
+            if (sceneJourney != null && sceneJourney.bookRoom) { sceneJourney.OpenWorld(); return; }
             ExperienceNavigator.ReturnToHub();
         }
 
         public void SummonFoxHelp()
         {
-            if (restaurantEvaluation != null)
-            {
-                restaurantEvaluation.ToggleFoxHelp();
-                return;
-            }
-
-            if (companion != null)
-            {
-                companion.ResetToObserving();
-                companion.Celebrate();
-            }
+            if (restaurantEvaluation != null) { restaurantEvaluation.ToggleFoxHelp(); return; }
+            if (companion != null) { companion.ResetToObserving(); companion.Celebrate(); }
         }
 
         public void RestartConversation()
         {
-            if (restaurantEvaluation != null)
-                restaurantEvaluation.Begin();
+            if (restaurantEvaluation != null) restaurantEvaluation.Begin();
         }
-
-        // Backwards-compatible aliases used by legacy Editor builders (e.g. ApartmentPilotBuilder)
-        public void ToggleDayNight() { }
-        public void SummonCompanion() => SummonFoxHelp();
-        public void ReturnToHub() => ReturnToPreviousScene();
 
         public void RefreshLabels()
         {
             if (movementStatusText != null)
             {
-                bool smooth = comfortOptions != null && comfortOptions.leftController != null && comfortOptions.leftController.smoothMotionEnabled;
+                bool smooth = comfortOptions != null && comfortOptions.IsSmoothMovementEnabled;
                 movementStatusText.text = smooth ? "MOVE: SMOOTH" : "MOVE: TELEPORT";
-            }
-
-            if (seatedStandingStatusText != null)
-            {
-                bool seated = comfortOptions != null && comfortOptions.IsSeatedMode;
-                seatedStandingStatusText.text = seated ? "POSTURE: SEATED" : "POSTURE: STANDING";
             }
         }
     }

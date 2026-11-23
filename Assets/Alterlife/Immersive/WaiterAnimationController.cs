@@ -30,9 +30,15 @@ namespace Alterlife.Immersive
         static readonly int TalkVariantHash = Animator.StringToHash("TalkVariant");
         static readonly int IsListeningHash = Animator.StringToHash("IsListening");
         static readonly int IsThinkingHash = Animator.StringToHash("IsThinking");
+        static readonly int IsWalkingHash = Animator.StringToHash("IsWalking");
+        static readonly int IsCarryingTrayHash = Animator.StringToHash("IsCarryingTray");
         static readonly int WaveHash = Animator.StringToHash("Wave");
         static readonly int HandGestureHash = Animator.StringToHash("HandGesture");
         static readonly int ServePresentHash = Animator.StringToHash("ServePresent");
+        static readonly int ClearTableHash = Animator.StringToHash("ClearTable");
+
+        bool isWalking;
+        bool isCarryingTray;
 
         readonly float[] audioSamples = new float[256];
 
@@ -144,6 +150,29 @@ namespace Alterlife.Immersive
                 animator.SetTrigger(HandGestureHash);
         }
 
+        public void SetWalkingState(bool walking, bool carryingTray)
+        {
+            isWalking = walking;
+            isCarryingTray = carryingTray;
+            if (animator != null)
+            {
+                animator.SetBool(IsWalkingHash, walking);
+                animator.SetBool(IsCarryingTrayHash, carryingTray);
+            }
+        }
+
+        public void TriggerServePresent()
+        {
+            if (animator != null)
+                animator.SetTrigger(ServePresentHash);
+        }
+
+        public void TriggerClearTable()
+        {
+            if (animator != null)
+                animator.SetTrigger(ClearTableHash);
+        }
+
         void Update()
         {
             if (animator == null || voice == null)
@@ -157,10 +186,12 @@ namespace Alterlife.Immersive
             }
             wasWaiterSpeaking = isSpeaking;
 
-            bool isThinking = !isSpeaking && voice.IsThinking;
-            bool isListening = !isSpeaking && !isThinking && voice.IsPlayerSpeaking;
+            bool isThinking = !isSpeaking && !isWalking && voice.IsThinking;
+            bool isListening = !isSpeaking && !isThinking && !isWalking && voice.IsPlayerSpeaking;
 
-            animator.SetBool(IsTalkingHash, isSpeaking);
+            animator.SetBool(IsWalkingHash, isWalking);
+            animator.SetBool(IsCarryingTrayHash, isCarryingTray);
+            animator.SetBool(IsTalkingHash, isSpeaking && !isWalking);
             animator.SetBool(IsThinkingHash, isThinking);
             animator.SetBool(IsListeningHash, isListening);
         }

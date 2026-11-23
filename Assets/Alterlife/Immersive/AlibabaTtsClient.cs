@@ -243,15 +243,15 @@ namespace Alterlife.Immersive
             string languageType = isFrench ? "French" : "English";
             var sb = new StringBuilder(256);
             sb.Append("{\"model\":");
-            sb.Append(JsonEscape(spec.ModelId));
+            sb.Append(RestaurantVoiceBridge.JsonEscape(spec.ModelId));
             sb.Append(",\"input\":{\"text\":");
-            sb.Append(JsonEscape(text));
+            sb.Append(RestaurantVoiceBridge.JsonEscape(text));
             sb.Append(",\"voice\":");
-            sb.Append(JsonEscape(string.IsNullOrWhiteSpace(spec.Voice) ? DefaultVoice : spec.Voice));
+            sb.Append(RestaurantVoiceBridge.JsonEscape(string.IsNullOrWhiteSpace(spec.Voice) ? DefaultVoice : spec.Voice));
             if (spec.IncludeLanguageType)
             {
                 sb.Append(",\"language_type\":");
-                sb.Append(JsonEscape(languageType));
+                sb.Append(RestaurantVoiceBridge.JsonEscape(languageType));
             }
             sb.Append("}}");
             return sb.ToString();
@@ -263,15 +263,15 @@ namespace Alterlife.Immersive
             string rateStr = clampedRate.ToString("0.##", CultureInfo.InvariantCulture);
             var sb = new StringBuilder(384);
             sb.Append("{\"header\":{\"action\":\"run-task\",\"task_id\":");
-            sb.Append(JsonEscape(taskId));
+            sb.Append(RestaurantVoiceBridge.JsonEscape(taskId));
             sb.Append(",\"streaming\":\"out\"},\"payload\":{\"task_group\":\"audio\",\"task\":\"tts\",\"function\":\"SpeechSynthesizer\",\"model\":");
-            sb.Append(JsonEscape(modelId));
+            sb.Append(RestaurantVoiceBridge.JsonEscape(modelId));
             sb.Append(",\"parameters\":{\"text_type\":\"PlainText\",\"format\":\"pcm\",\"sample_rate\":");
             sb.Append(sampleRate.ToString(CultureInfo.InvariantCulture));
             sb.Append(",\"volume\":50,\"rate\":");
             sb.Append(rateStr);
             sb.Append(",\"pitch\":1.0,\"word_timestamp_enabled\":false,\"phoneme_timestamp_enabled\":false},\"input\":{\"text\":");
-            sb.Append(JsonEscape(text));
+            sb.Append(RestaurantVoiceBridge.JsonEscape(text));
             sb.Append("}}}");
             return sb.ToString();
         }
@@ -857,33 +857,6 @@ namespace Alterlife.Immersive
             {
                 return null;
             }
-        }
-
-        static string JsonEscape(string value)
-        {
-            if (value == null) return "\"\"";
-            var sb = new StringBuilder(value.Length + 8);
-            sb.Append('"');
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                switch (c)
-                {
-                    case '"': sb.Append("\\\""); break;
-                    case '\\': sb.Append("\\\\"); break;
-                    case '\b': sb.Append("\\b"); break;
-                    case '\f': sb.Append("\\f"); break;
-                    case '\n': sb.Append("\\n"); break;
-                    case '\r': sb.Append("\\r"); break;
-                    case '\t': sb.Append("\\t"); break;
-                    default:
-                        if (c < ' ') sb.AppendFormat(CultureInfo.InvariantCulture, "\\u{0:X4}", (int)c);
-                        else sb.Append(c);
-                        break;
-                }
-            }
-            sb.Append('"');
-            return sb.ToString();
         }
     }
 }

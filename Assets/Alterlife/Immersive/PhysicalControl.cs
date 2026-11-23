@@ -14,8 +14,8 @@ namespace Alterlife.Immersive
     {
         public UnityEvent pressed = new UnityEvent();
         public Renderer feedbackRenderer;
-        public Color normalColor = new Color(0.06f, 0.09f, 0.14f, 0.78f);
-        public Color hoverColor = new Color(0.24f, 0.62f, 0.88f, 0.92f);
+        public Color normalColor = new Color(0.085f, 0.09f, 0.10f, 0.96f);
+        public Color hoverColor = new Color(0.24f, 0.26f, 0.30f, 0.98f);
         public bool applyMinimalistTintOnAwake = true;
 
         XRSimpleInteractable interactable;

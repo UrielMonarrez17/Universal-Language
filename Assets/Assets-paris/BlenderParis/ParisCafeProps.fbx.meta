@@ -1,0 +1,254 @@
+fileFormatVersion: 2
+guid: 2cfbd83f08fea3f4fb3db9d433589b2e
+ModelImporter:
+  serializedVersion: 24501
+  internalIDToNameTable: []
+  externalObjects:
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_Brass
+    second: {fileID: 2100000, guid: 53dc4ca6c60e95c4797f0eedebae7754, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_BreadToast
+    second: {fileID: 2100000, guid: 4e89ec04b15ef6743a17b68513ed4d7b, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_CheeseMelted
+    second: {fileID: 2100000, guid: e36f0814aef171741ba605f1622e2a0f, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_Coffee
+    second: {fileID: 2100000, guid: 63e59b56dfdd8c448991d61eeeaaac3e, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_CounterGreen
+    second: {fileID: 2100000, guid: f1c0d3373639a5747b643bf10a8ebd19, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_Crema
+    second: {fileID: 2100000, guid: f332a4c4efdc0344aab59568f8f39c54, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_CremeCaramel
+    second: {fileID: 2100000, guid: f99f1b04784b1b34a8e602f1a00a55d9, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_CremeCustard
+    second: {fileID: 2100000, guid: d22e1a5021ca22849a01c997fb45a020, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_Croissant
+    second: {fileID: 2100000, guid: b5db024a6b5f7854e8a18b09f05fbfc6, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_DarkWood
+    second: {fileID: 2100000, guid: 3155f7e3a74bde7448a644bedaaba5c2, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_EggWhite
+    second: {fileID: 2100000, guid: 033295b03a6f9084fbdebc44db7408f7, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_EggYolk
+    second: {fileID: 2100000, guid: 308f44f38fe35d74db52fa2bf387d231, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_EspressoChrome
+    second: {fileID: 2100000, guid: d7ec5c51d13b2684cb75f0b40d8a4076, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_Glass
+    second: {fileID: 2100000, guid: b72d522199902cd43b19718b78fe2300, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_Ham
+    second: {fileID: 2100000, guid: 1d707c496aba3cf4f89f7fa2dc5e039d, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_OliveDark
+    second: {fileID: 2100000, guid: b792e9d35aff6134bab37da549b01246, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_OrangeJuice
+    second: {fileID: 2100000, guid: 40c3676304c4c0946ab05a0f3b903a78, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_Porcelain
+    second: {fileID: 2100000, guid: 7edff574d278bef4aab29b1b3f00e03d, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_QuicheCrust
+    second: {fileID: 2100000, guid: 38541eeea0cf7f34c98fe4da039841ad, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_QuicheFilling
+    second: {fileID: 2100000, guid: f804a022a8afac9448cbcff172badd35, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_ReceiptPaper
+    second: {fileID: 2100000, guid: b1990929fd1615a4d8868a3d476bf99c, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_SaladGreen
+    second: {fileID: 2100000, guid: d14f68431a9f05349b83b281637b045a, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_Silver
+    second: {fileID: 2100000, guid: 9e11d9f5e52d1b24e9fcdc9226a2d262, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_SoupCrock
+    second: {fileID: 2100000, guid: b58d5ac9c2015b6468ae5057fcd1ef4b, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_SoupGratin
+    second: {fileID: 2100000, guid: 01ea41b091a778249bbc2959c8d98851, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_TeaMint
+    second: {fileID: 2100000, guid: 7d8f3bca8a2f3b94fbd6b0fbf9e30cc8, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_TomatoRed
+    second: {fileID: 2100000, guid: b4b7fb8aff2d15b4fb3379dd29031896, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Cafe_Water
+    second: {fileID: 2100000, guid: e9b78f65e3b377d44865e9b365965535, type: 2}
+  materials:
+    materialImportMode: 2
+    materialName: 0
+    materialSearch: 1
+    materialLocation: 1
+    searchTexturesGlobally: 0
+  animations:
+    legacyGenerateAnimations: 4
+    bakeSimulation: 0
+    resampleCurves: 1
+    optimizeGameObjects: 0
+    removeConstantScaleCurves: 0
+    motionNodeName: 
+    animationImportErrors: 
+    animationImportWarnings: 
+    animationRetargetingWarnings: 
+    animationDoRetargetingWarnings: 0
+    importAnimatedCustomProperties: 0
+    importConstraints: 0
+    animationCompression: 1
+    animationRotationError: 0.5
+    animationPositionError: 0.5
+    animationScaleError: 0.5
+    animationWrapMode: 0
+    extraExposedTransformPaths: []
+    extraUserProperties: []
+    clipAnimations: []
+    isReadable: 0
+  meshes:
+    lODScreenPercentages: []
+    globalScale: 1
+    meshCompression: 0
+    addColliders: 0
+    useSRGBMaterialColor: 1
+    sortHierarchyByName: 1
+    importPhysicalCameras: 1
+    importVisibility: 1
+    importBlendShapes: 1
+    importCameras: 0
+    importLights: 0
+    nodeNameCollisionStrategy: 1
+    fileIdsGeneration: 2
+    swapUVChannels: 0
+    generateSecondaryUV: 0
+    useFileUnits: 1
+    keepQuads: 0
+    weldVertices: 1
+    bakeAxisConversion: 0
+    preserveHierarchy: 0
+    skinWeightsMode: 0
+    maxBonesPerVertex: 4
+    minBoneWeight: 0.001
+    optimizeBones: 1
+    generateMeshLods: 0
+    meshLodGenerationFlags: 0
+    maximumMeshLod: -1
+    importUVs: -1
+    importVertexColors: 1
+    meshOptimizationFlags: -1
+    indexFormat: 0
+    secondaryUVAngleDistortion: 8
+    secondaryUVAreaDistortion: 15.000001
+    secondaryUVHardAngle: 88
+    secondaryUVMarginMethod: 1
+    secondaryUVMinLightmapResolution: 40
+    secondaryUVMinObjectScale: 1
+    secondaryUVPackMargin: 4
+    useFileScale: 1
+    strictVertexDataChecks: 0
+  tangentSpace:
+    normalSmoothAngle: 60
+    normalImportMode: 0
+    tangentImportMode: 3
+    normalCalculationMode: 4
+    legacyComputeAllNormalsFromSmoothingGroupsWhenMeshHasBlendShapes: 0
+    blendShapeNormalImportMode: 1
+    normalSmoothingSource: 0
+    calculateBlendshapeNormalsDeltaFromImportedNormals: 0
+  referencedClips: []
+  importAnimation: 0
+  humanDescription:
+    serializedVersion: 3
+    human: []
+    skeleton: []
+    armTwist: 0.5
+    foreArmTwist: 0.5
+    upperLegTwist: 0.5
+    legTwist: 0.5
+    armStretch: 0.05
+    legStretch: 0.05
+    feetSpacing: 0
+    globalScale: 1
+    rootMotionBoneName: 
+    hasTranslationDoF: 0
+    hasExtraRoot: 0
+    skeletonHasParents: 1
+  lastHumanDescriptionAvatarSource: {instanceID: 0}
+  autoGenerateAvatarMappingIfUnspecified: 1
+  animationType: 2
+  humanoidOversampling: 1
+  avatarSetup: 0
+  addHumanoidExtraRootOnlyWhenUsingAvatar: 1
+  importBlendShapeDeformPercent: 1
+  remapMaterialsIfMaterialImportModeIsNone: 0
+  additionalBone: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
